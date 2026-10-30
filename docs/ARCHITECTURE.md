@@ -9,6 +9,7 @@ Modular Python application (`src/dividend_agent/`) with:
 - **Research** — SEC EDGAR + company facts + dividend labels + screener + cited memos (M2)
 - **Options / strategy** — chains, probability, WAC/coverage/ex-div gates, TradeIntent selection (M3)
 - **Execution** — reconciliation (M1); intent validation (M3); idempotent paper orders, approvals, kill switch (M4); null guardrails block auto-submit
+- **Scheduling** — idempotent startup / trading-day / monthly / event jobs, exchange calendar, worker lock, alerts + monthly reports (M5)
 - **Storage** — SQLite WAL + migrations (M1)
 - **Scheduling / reporting** — unattended cadence (M5)
 - **Deploy** — Docker Compose on TrueNAS SCALE (M6)

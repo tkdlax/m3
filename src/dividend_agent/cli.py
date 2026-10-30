@@ -44,6 +44,7 @@ research_app = typer.Typer(help="SEC research and issuer screening (read-only)."
 options_app = typer.Typer(help="Covered-call evaluation (proposals only unless trade submit).")
 trade_app = typer.Typer(help="Paper order lifecycle (dry-run / paper_auto).")
 approvals_app = typer.Typer(help="Human approval queue.")
+scheduler_app = typer.Typer(help="Autonomous scheduler cycles (idempotent).")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
 app.add_typer(ledger_app, name="ledger")
@@ -51,6 +52,7 @@ app.add_typer(research_app, name="research")
 app.add_typer(options_app, name="options")
 app.add_typer(trade_app, name="trade")
 app.add_typer(approvals_app, name="approvals")
+app.add_typer(scheduler_app, name="scheduler")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -699,6 +701,97 @@ def approvals_reject_cmd(
     finally:
         conn.close()
     console.print_json(json.dumps(row))
+
+
+@scheduler_app.command("run")
+def scheduler_run_cmd(
+    jobs: Annotated[
+        str,
+        typer.Option(
+            "--jobs",
+            help="Comma-separated: startup,trading_day,monthly,event_review",
+        ),
+    ] = "startup,trading_day",
+    config: Annotated[Path, typer.Option("--config", "-c")] = Path("config/strategy.example.yaml"),
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+    reports: Annotated[Path, typer.Option("--reports")] = Path("/reports"),
+    force: Annotated[bool, typer.Option("--force", help="Ignore idempotency keys.")] = False,
+    period: Annotated[
+        str | None,
+        typer.Option("--period", help="Override period key for single-job runs."),
+    ] = None,
+    event: Annotated[
+        str | None,
+        typer.Option("--event", help="Event key for event_review (e.g. fill:...)."),
+    ] = None,
+    chain: Annotated[
+        Path | None,
+        typer.Option("--chain", help="Optional option-chain JSON for monthly evaluate."),
+    ] = None,
+) -> None:
+    """Run scheduler jobs once under the worker lock (paper verify inside jobs)."""
+    from dividend_agent.brokers.factory import create_broker_adapter
+    from dividend_agent.scheduling.cycle import format_cycle_json, run_jobs
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    try:
+        adapter = create_broker_adapter()
+    except BrokerConfigError as exc:
+        err_console.print(f"[red]fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    names = [j.strip() for j in jobs.split(",") if j.strip()]
+    period_keys: dict[str, str] = {}
+    if period and len(names) == 1:
+        period_keys[names[0]] = period
+    if event:
+        period_keys["event_review"] = event
+        if "event_review" not in names:
+            names.append("event_review")
+    try:
+        cycle = run_jobs(
+            config=cfg,
+            broker=adapter,
+            db_path=db,
+            reports_dir=reports,
+            job_names=names,
+            force=force,
+            period_keys=period_keys or None,
+            option_chain_path=chain,
+        )
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]scheduler failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print_json(format_cycle_json(cycle))
+
+
+@scheduler_app.command("status")
+def scheduler_status_cmd(
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+) -> None:
+    """Show recent job_keys and notifications."""
+    conn = open_migrated(db)
+    try:
+        keys = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM job_keys ORDER BY updated_at DESC LIMIT 20"
+            ).fetchall()
+        ]
+        notes = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, notification_type, severity, title, created_at FROM notifications "
+                "ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    console.print_json(json.dumps({"job_keys": keys, "notifications": notes}))
 
 
 def main() -> None:

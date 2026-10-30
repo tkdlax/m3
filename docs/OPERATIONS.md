@@ -10,7 +10,32 @@
 
 ## Kill switch
 
-Set `TRADING_PAUSED=true` (Compose default). Blocks new order submission; reconciliation/reporting remain allowed.
+Set `TRADING_PAUSED=true` (Compose default). Blocks new order submission and trading-day recovery submits; **research, reconciliation, reporting, and alerts continue**.
+
+## Scheduler (M5)
+
+Idempotent jobs under a single SQLite worker lock. Period keys prevent duplicate completed runs (use `--force` to override).
+
+| Job | Cadence | Behavior |
+|---|---|---|
+| `startup` | Each boot / daily | Verify paper, schema, secrets presence, clock, capabilities; reconcile; expire stale approvals |
+| `trading_day` | Exchange trading days | Reconcile, open orders, assignment/expiry + dividend alerts, drift; skip holidays; `skipped_paused` when kill switch on |
+| `monthly` | Calendar month | Research refresh hook, 100-share lot scan, optional chain evaluate, partial accumulation notes, monthly JSON report |
+| `event_review` | On demand | Focused review for fills / corp actions / outages / mismatches |
+
+Internal timestamps are UTC; display TZ `America/Denver` is fine for logs. Holiday calendar is NYSE-oriented.
+
+```bash
+dividend-agent scheduler run --jobs startup,trading_day \
+  --config /config/strategy.yaml --db /data/agent.sqlite3 --reports /reports
+dividend-agent scheduler run --jobs monthly --period 2026-10 \
+  --db /data/agent.sqlite3 --reports /reports --chain /data/chain.json
+dividend-agent scheduler run --jobs event_review --event fill:client-order-id \
+  --db /data/agent.sqlite3 --reports /reports
+dividend-agent scheduler status --db /data/agent.sqlite3
+```
+
+Reports and alerts are written under `--reports` (e.g. `monthly-report-YYYY-MM.json`, `alert-*.json`) and mirrored in SQLite `notifications`.
 
 ## Common commands
 
@@ -26,6 +51,7 @@ dividend-agent trade recover <client_order_id> --db /data/agent.sqlite3
 dividend-agent approvals list --db /data/agent.sqlite3
 dividend-agent approvals approve <approval_id> --db /data/agent.sqlite3
 dividend-agent approvals reject <approval_id> --db /data/agent.sqlite3
+dividend-agent scheduler run --jobs startup,trading_day --db /data/agent.sqlite3 --reports /reports
 dividend-agent health
 ```
 
@@ -35,11 +61,10 @@ dividend-agent health
 - Client order IDs are stable (`da-<intent_uuid_hex>`). After timeout, the manager **queries by client order ID** before any retry.
 - Hard blocks (live destination, uncovered, strike below WAC, etc.) are never approvable.
 - Exception approvals expire, can be superseded, and must revalidate before submit.
-- `broker reconcile` remains read-only against Alpaca paper.
 
-## Cadence (M5)
+## Cadence
 
-Startup verify → trading-day drift checks → monthly research/call cycle → event-driven reviews → monthly report.
+Startup verify → trading-day drift checks → monthly research/call cycle → event-driven reviews → monthly report. Exceptions pause trading safely; reporting continues.
 
 ## Backups
 
