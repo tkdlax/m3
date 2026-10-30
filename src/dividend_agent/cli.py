@@ -45,6 +45,7 @@ options_app = typer.Typer(help="Covered-call evaluation (proposals only unless t
 trade_app = typer.Typer(help="Paper order lifecycle (dry-run / paper_auto).")
 approvals_app = typer.Typer(help="Human approval queue.")
 scheduler_app = typer.Typer(help="Autonomous scheduler cycles (idempotent).")
+ops_app = typer.Typer(help="Operator promote / emergency helpers.")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
 app.add_typer(ledger_app, name="ledger")
@@ -53,6 +54,7 @@ app.add_typer(options_app, name="options")
 app.add_typer(trade_app, name="trade")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(scheduler_app, name="scheduler")
+app.add_typer(ops_app, name="ops")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -792,6 +794,60 @@ def scheduler_status_cmd(
     finally:
         conn.close()
     console.print_json(json.dumps({"job_keys": keys, "notifications": notes}))
+
+
+@ops_app.command("record-promote")
+def ops_record_promote_cmd(
+    config: Annotated[Path, typer.Option("--config", "-c")] = Path("config/strategy.example.yaml"),
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+) -> None:
+    """Record an audit event that the operator intends to enable paper_auto.
+
+    Does not rewrite config. Fails closed unless auto-submit blockers are clear.
+    """
+    try:
+        cfg = load_config(config)
+        cfg.assert_may_auto_submit()
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:  # noqa: BLE001 — AutoSubmitBlockedError etc.
+        err_console.print(f"[red]promote blocked:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    conn = open_migrated(db)
+    try:
+        repo = LedgerRepository(conn)
+        repo.append_audit(
+            "ops.promote_paper_auto_intent",
+            {
+                "config_path": str(config),
+                "mode_in_config": cfg.mode.value,
+                "auto_paper_orders_enabled": cfg.execution.auto_paper_orders_enabled,
+                "unresolved_guardrails": cfg.execution.unresolved_guardrails,
+                "note": (
+                    "Operator recorded promote intent after guardrail check. "
+                    "Config edit + TRADING_PAUSED=false still required."
+                ),
+            },
+        )
+    finally:
+        conn.close()
+    console.print("[green]ok[/green] audit event ops.promote_paper_auto_intent recorded")
+
+
+@ops_app.command("emergency-stop")
+def ops_emergency_stop_cmd() -> None:
+    """Print emergency-stop steps (kill switch). Does not talk to the broker."""
+    console.print(
+        "Emergency stop (paper):\n"
+        "  1. Set TRADING_PAUSED=true in .env (or export it)\n"
+        "  2. docker compose restart agent   # or: docker stop dividend-agent\n"
+        "  3. Confirm: docker compose exec agent printenv TRADING_PAUSED\n"
+        "  4. Optional: revoke Alpaca paper API keys in the Alpaca dashboard\n"
+        "Research/reporting may continue; new order submits stay blocked.\n"
+        "There is no live trading path in v1."
+    )
 
 
 def main() -> None:

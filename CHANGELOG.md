@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- M6 TrueNAS release: hardened Compose (non-root, read-only root, no ports),
+  entrypoint scheduler loop, backup/restore/promote scripts, SCALE deployment
+  runbook, operator promote path, CI docker compose build, RELEASE_NOTES.
 - M5 autonomous scheduler: startup/trading-day/monthly/event jobs, NYSE holiday
   skip, worker lock, idempotent job_keys, file+SQLite alerts, monthly reports;
   TRADING_PAUSED pauses trading independently of research/reporting.

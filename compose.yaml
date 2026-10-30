@@ -1,13 +1,17 @@
 # Paper-only dry-run deployment (PROJECT_SPEC §16).
-# Copy .env.example -> .env and strategy.example.yaml -> a mounted config before paper_auto.
+# Copy .env.example → .env and supply strategy.yaml before paper_auto.
+# No live trading path. Do not place live Alpaca credentials on the host for v1.
 services:
   agent:
     build:
       context: .
       dockerfile: Dockerfile
-    image: dividend-agent:0.1.0
+    image: dividend-agent:${IMAGE_TAG:-0.1.0}
     container_name: dividend-agent
     restart: unless-stopped
+    user: "10001:10001"
+    init: true
+    stop_grace_period: 30s
     environment:
       TZ: ${TZ:-America/Denver}
       TRADING_PAUSED: ${TRADING_PAUSED:-true}
@@ -16,6 +20,14 @@ services:
       ALPACA_PAPER_API_KEY: ${ALPACA_PAPER_API_KEY:-}
       ALPACA_PAPER_API_SECRET: ${ALPACA_PAPER_API_SECRET:-}
       ALPACA_PAPER_BASE_URL: ${ALPACA_PAPER_BASE_URL:-https://paper-api.alpaca.markets}
+      CONFIG_PATH: /config/strategy.yaml
+      DB_PATH: /data/agent.sqlite3
+      REPORTS_DIR: /reports
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      SCHEDULER_INTERVAL_SEC: ${SCHEDULER_INTERVAL_SEC:-3600}
+      SCHEDULER_JOBS: ${SCHEDULER_JOBS:-startup,trading_day}
+      # Set true only after paper credentials are configured and verified.
+      REQUIRE_PAPER_ON_START: ${REQUIRE_PAPER_ON_START:-false}
     env_file:
       - path: .env
         required: false
@@ -26,20 +38,26 @@ services:
       - ./config/strategy.example.yaml:/config/strategy.yaml:ro
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 256
     mem_limit: 512m
     cpus: 1.0
-    # No inbound ports for MVP (approvals via CLI later).
+    # No inbound ports for MVP (approvals via authenticated CLI only).
     healthcheck:
       test: ["CMD", "dividend-agent", "health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   agent-data:
