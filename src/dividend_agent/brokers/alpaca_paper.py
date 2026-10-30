@@ -15,11 +15,13 @@ from dividend_agent.brokers.credentials import (
 )
 from dividend_agent.brokers.interface import (
     M1_READ_CAPABILITIES,
+    M4_SUBMIT_CAPABILITIES,
     BrokerAdapter,
     BrokerConfigError,
     BrokerTransportError,
     PaperVerificationResult,
 )
+from dividend_agent.brokers.orders import PaperOrderRequest
 from dividend_agent.brokers.types import (
     AccountSnapshot,
     ActivitySnapshot,
@@ -91,7 +93,7 @@ class AlpacaPaperAdapter(BrokerAdapter):
         self.close()
 
     def discover_capabilities(self) -> tuple[str, ...]:
-        return M1_READ_CAPABILITIES
+        return M1_READ_CAPABILITIES + M4_SUBMIT_CAPABILITIES
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         try:
@@ -231,27 +233,63 @@ class AlpacaPaperAdapter(BrokerAdapter):
         for item in payload:
             if not isinstance(item, dict):
                 continue
-            out.append(
-                OrderSnapshot(
-                    broker_order_id=str(item.get("id") or ""),
-                    client_order_id=(
-                        str(item["client_order_id"]) if item.get("client_order_id") else None
-                    ),
-                    symbol=str(item.get("symbol") or ""),
-                    side=str(item.get("side") or ""),
-                    order_type=str(item.get("type") or item.get("order_type") or ""),
-                    status=str(item.get("status") or ""),
-                    qty=_dec_opt(item.get("qty")),
-                    filled_qty=_dec_opt(item.get("filled_qty")),
-                    limit_price=_dec_opt(item.get("limit_price")),
-                    filled_avg_price=_dec_opt(item.get("filled_avg_price")),
-                    asset_class=(str(item["asset_class"]) if item.get("asset_class") else None),
-                    submitted_at=_parse_dt(item.get("submitted_at")),
-                    updated_at=_parse_dt(item.get("updated_at")),
-                    raw=item,
-                )
-            )
+            out.append(_order_from_payload(item))
         return out
+
+    def submit_paper_order(self, request: PaperOrderRequest) -> OrderSnapshot:
+        """POST /v2/orders against paper host only."""
+        assert_paper_base_url(self._base_url)
+        self._require_verified()
+        body: dict[str, Any] = {
+            "symbol": request.symbol,
+            "qty": str(request.qty),
+            "side": request.side,
+            "type": request.order_type,
+            "time_in_force": request.time_in_force,
+            "client_order_id": request.client_order_id,
+        }
+        if request.limit_price is not None:
+            body["limit_price"] = str(request.limit_price)
+        if request.asset_class:
+            # Options may need different fields; M4 supports equity + simple option symbols.
+            body["asset_class"] = request.asset_class
+        payload = self._request("POST", "/v2/orders", json=body)
+        if not isinstance(payload, dict):
+            raise BrokerTransportError("unexpected submit order response")
+        return _order_from_payload(payload)
+
+    def get_order_by_client_id(self, client_order_id: str) -> OrderSnapshot | None:
+        self._require_verified()
+        try:
+            payload = self._request(
+                "GET",
+                "/v2/orders:by_client_order_id",
+                params={"client_order_id": client_order_id},
+            )
+        except BrokerTransportError as exc:
+            if "404" in str(exc):
+                return None
+            raise
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise BrokerTransportError("unexpected get-by-client-order-id payload")
+        return _order_from_payload(payload)
+
+    def cancel_paper_order(self, broker_order_id: str) -> OrderSnapshot:
+        self._require_verified()
+        self._request("DELETE", f"/v2/orders/{broker_order_id}")
+        # Re-fetch for status
+        payload = self._request("GET", f"/v2/orders/{broker_order_id}")
+        if isinstance(payload, dict):
+            return _order_from_payload(payload)
+        return OrderSnapshot(
+            broker_order_id=broker_order_id,
+            symbol="",
+            side="",
+            order_type="",
+            status="canceled",
+        )
 
     def list_activities(
         self,
@@ -290,3 +328,22 @@ class AlpacaPaperAdapter(BrokerAdapter):
                 )
             )
         return out
+
+
+def _order_from_payload(item: dict[str, Any]) -> OrderSnapshot:
+    return OrderSnapshot(
+        broker_order_id=str(item.get("id") or ""),
+        client_order_id=(str(item["client_order_id"]) if item.get("client_order_id") else None),
+        symbol=str(item.get("symbol") or ""),
+        side=str(item.get("side") or ""),
+        order_type=str(item.get("type") or item.get("order_type") or ""),
+        status=str(item.get("status") or ""),
+        qty=_dec_opt(item.get("qty")),
+        filled_qty=_dec_opt(item.get("filled_qty")),
+        limit_price=_dec_opt(item.get("limit_price")),
+        filled_avg_price=_dec_opt(item.get("filled_avg_price")),
+        asset_class=(str(item["asset_class"]) if item.get("asset_class") else None),
+        submitted_at=_parse_dt(item.get("submitted_at")),
+        updated_at=_parse_dt(item.get("updated_at")),
+        raw=item,
+    )

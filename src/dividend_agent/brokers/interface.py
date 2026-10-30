@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from dividend_agent.brokers.orders import PaperOrderRequest
 from dividend_agent.brokers.types import (
     AccountSnapshot,
     ActivitySnapshot,
@@ -35,9 +36,15 @@ M1_READ_CAPABILITIES: tuple[str, ...] = (
     "list_activities",
 )
 
+M4_SUBMIT_CAPABILITIES: tuple[str, ...] = (
+    "submit_paper_order",
+    "get_order_by_client_id",
+    "cancel_paper_order",
+)
+
 
 class BrokerAdapter(ABC):
-    """Paper-trading broker contract. Order submission is out of scope for M1."""
+    """Paper-trading broker contract. Live routes are forbidden."""
 
     @abstractmethod
     def verify_paper(self) -> PaperVerificationResult:
@@ -67,6 +74,20 @@ class BrokerAdapter(ABC):
         page_size: int = 100,
     ) -> list[ActivitySnapshot]:
         """Account activities (fills, dividends, assignments, etc.)."""
+
+    def submit_paper_order(self, request: PaperOrderRequest) -> OrderSnapshot:
+        """Submit a paper order. Default: fail closed (adapter lacks submit)."""
+        raise BrokerConfigError(
+            "submit_paper_order not available on this adapter (paper submit required)"
+        )
+
+    def get_order_by_client_id(self, client_order_id: str) -> OrderSnapshot | None:
+        """Lookup by client order ID (idempotency / timeout recovery)."""
+        raise BrokerConfigError("get_order_by_client_id not available on this adapter")
+
+    def cancel_paper_order(self, broker_order_id: str) -> OrderSnapshot:
+        """Cancel a paper order by broker id."""
+        raise BrokerConfigError("cancel_paper_order not available on this adapter")
 
 
 class UnconfiguredBrokerAdapter(BrokerAdapter):

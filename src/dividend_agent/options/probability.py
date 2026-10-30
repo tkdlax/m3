@@ -57,9 +57,7 @@ def year_fraction(days: int) -> float:
 def _d2(spot: float, barrier: float, t: float, r: float, q: float, sigma: float) -> float:
     if spot <= 0 or barrier <= 0 or sigma <= 0 or t <= 0:
         raise ProbabilityModelError("invalid BS inputs")
-    return (math.log(spot / barrier) + (r - q - 0.5 * sigma * sigma) * t) / (
-        sigma * math.sqrt(t)
-    )
+    return (math.log(spot / barrier) + (r - q - 0.5 * sigma * sigma) * t) / (sigma * math.sqrt(t))
 
 
 def terminal_prob_below(

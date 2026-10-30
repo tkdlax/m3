@@ -131,9 +131,7 @@ def parse_contract(payload: dict[str, Any]) -> OptionContract:
         adjusted=adjusted,
         tradable=bool(payload.get("tradable", True)),
         status=str(payload.get("status") or "active"),
-        instrument_id=(
-            str(payload["instrument_id"]) if payload.get("instrument_id") else None
-        ),
+        instrument_id=(str(payload["instrument_id"]) if payload.get("instrument_id") else None),
         raw=payload,
     )
 

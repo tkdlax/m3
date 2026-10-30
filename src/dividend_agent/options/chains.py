@@ -54,9 +54,7 @@ def parse_chain_payload(payload: dict[str, Any]) -> OptionChain:
             continue
         contract_raw = item.get("contract")
         quote_raw = item.get("quote")
-        contract_payload: dict[str, Any] = (
-            contract_raw if isinstance(contract_raw, dict) else item
-        )
+        contract_payload: dict[str, Any] = contract_raw if isinstance(contract_raw, dict) else item
         quote_payload: dict[str, Any] = quote_raw if isinstance(quote_raw, dict) else item
         if "underlying" not in contract_payload:
             contract_payload = {**contract_payload, "underlying": underlying}

@@ -41,12 +41,16 @@ config_app = typer.Typer(help="Strategy configuration commands.")
 broker_app = typer.Typer(help="Broker paper-verification and ledger commands.")
 ledger_app = typer.Typer(help="Local SQLite ledger status.")
 research_app = typer.Typer(help="SEC research and issuer screening (read-only).")
-options_app = typer.Typer(help="Covered-call evaluation (no order submission).")
+options_app = typer.Typer(help="Covered-call evaluation (proposals only unless trade submit).")
+trade_app = typer.Typer(help="Paper order lifecycle (dry-run / paper_auto).")
+approvals_app = typer.Typer(help="Human approval queue.")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
 app.add_typer(ledger_app, name="ledger")
 app.add_typer(research_app, name="research")
 app.add_typer(options_app, name="options")
+app.add_typer(trade_app, name="trade")
+app.add_typer(approvals_app, name="approvals")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -519,9 +523,7 @@ def options_evaluate_cmd(
     # Anchor "now" to as_of so historical fixtures are not rejected as stale
     # against wall-clock time during dry-run evaluation.
     eval_now = datetime.combine(as_of_date, time(15, 0), tzinfo=UTC)
-    ex_window = (
-        ExDividendWindow(ex_date=date.fromisoformat(ex_date)) if ex_date else None
-    )
+    ex_window = ExDividendWindow(ex_date=date.fromisoformat(ex_date)) if ex_date else None
     result = select_covered_call_intents(
         config=cfg,
         chain=chain,
@@ -548,9 +550,155 @@ def options_evaluate_cmd(
         )
         raise typer.Exit(code=1)
     console.print(
-        f"[green]ok[/green] {len(result.intents)} TradeIntent(s) proposed "
-        "(not submitted)."
+        f"[green]ok[/green] {len(result.intents)} TradeIntent(s) proposed (not submitted)."
     )
+
+
+@trade_app.command("status")
+def trade_status_cmd(
+    db: Annotated[Path, typer.Option("--db", help="SQLite path.")] = Path("/data/agent.sqlite3"),
+    client_order_id: Annotated[
+        str | None, typer.Option("--client-order-id", help="Filter one order.")
+    ] = None,
+) -> None:
+    """Show local paper order lifecycle rows."""
+    from dividend_agent.storage import ExecutionRepository
+
+    conn = open_migrated(db)
+    try:
+        repo = ExecutionRepository(conn)
+        if client_order_id:
+            row = repo.get_order(client_order_id)
+            rows = [row] if row else []
+        else:
+            rows = repo.list_orders()
+    finally:
+        conn.close()
+    console.print_json(json.dumps(rows))
+
+
+@trade_app.command("recover")
+def trade_recover_cmd(
+    client_order_id: Annotated[str, typer.Argument()],
+    config: Annotated[Path, typer.Option("--config", "-c")] = Path("config/strategy.example.yaml"),
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+) -> None:
+    """Recover an ambiguous order by querying broker client_order_id (paper only)."""
+    from dividend_agent.brokers.factory import create_broker_adapter
+    from dividend_agent.execution.order_manager import OrderManager
+    from dividend_agent.storage import ExecutionRepository
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    try:
+        adapter = create_broker_adapter()
+    except BrokerConfigError as exc:
+        err_console.print(f"[red]fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    conn = open_migrated(db)
+    try:
+        mgr = OrderManager(config=cfg, broker=adapter, repo=ExecutionRepository(conn))
+        row = mgr.recover_after_restart(client_order_id)
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]recover failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+        close = getattr(adapter, "close", None)
+        if callable(close):
+            close()
+    console.print_json(json.dumps(row))
+
+
+@approvals_app.command("list")
+def approvals_list_cmd(
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+) -> None:
+    """List pending approvals."""
+    from dividend_agent.execution.approval_queue import ApprovalQueue
+    from dividend_agent.storage import ExecutionRepository
+
+    conn = open_migrated(db)
+    try:
+        rows = ApprovalQueue(ExecutionRepository(conn)).list_pending()
+    finally:
+        conn.close()
+    console.print_json(json.dumps(rows))
+
+
+@approvals_app.command("approve")
+def approvals_approve_cmd(
+    approval_id: Annotated[str, typer.Argument()],
+    config: Annotated[Path, typer.Option("--config", "-c")] = Path("config/strategy.example.yaml"),
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+    submit: Annotated[
+        bool,
+        typer.Option(
+            "--submit/--no-submit",
+            help="After approve, submit if mode=paper_auto and guardrails allow.",
+        ),
+    ] = False,
+) -> None:
+    """Approve a pending exception (hard blocks always refused)."""
+    from dividend_agent.brokers.factory import create_broker_adapter
+    from dividend_agent.execution.approval_queue import ApprovalError, ApprovalQueue
+    from dividend_agent.execution.order_manager import OrderManager
+    from dividend_agent.storage import ExecutionRepository
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    conn = open_migrated(db)
+    try:
+        repo = ExecutionRepository(conn)
+        queue = ApprovalQueue(repo)
+        if not submit:
+            row = queue.approve(approval_id)
+            console.print_json(json.dumps(row))
+        else:
+            try:
+                adapter = create_broker_adapter()
+            except BrokerConfigError as exc:
+                err_console.print(f"[red]fail closed:[/red] {exc}")
+                raise typer.Exit(code=1) from exc
+            mgr = OrderManager(config=cfg, broker=adapter, repo=repo, approvals=queue)
+            try:
+                row = mgr.apply_approval_and_submit(approval_id)
+            finally:
+                close = getattr(adapter, "close", None)
+                if callable(close):
+                    close()
+            console.print_json(json.dumps(row))
+    except ApprovalError as exc:
+        err_console.print(f"[red]approval refused:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+
+
+@approvals_app.command("reject")
+def approvals_reject_cmd(
+    approval_id: Annotated[str, typer.Argument()],
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+) -> None:
+    """Reject a pending approval."""
+    from dividend_agent.execution.approval_queue import ApprovalError, ApprovalQueue
+    from dividend_agent.storage import ExecutionRepository
+
+    conn = open_migrated(db)
+    try:
+        row = ApprovalQueue(ExecutionRepository(conn)).reject(approval_id)
+    except ApprovalError as exc:
+        err_console.print(f"[red]reject failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+    console.print_json(json.dumps(row))
 
 
 def main() -> None:
