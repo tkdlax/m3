@@ -1,5 +1,9 @@
-# Optional TrueNAS SCALE override — mount host datasets (see docs/TRUENAS_DEPLOYMENT.md).
-# Usage: docker compose -f compose.yaml -f compose.truenas.yaml up -d
+# Optional TrueNAS SCALE override — bind-mount host datasets (docs/TRUENAS_DEPLOYMENT.md).
+# Usage:
+#   docker compose -f compose.yaml -f compose.truenas.yaml --env-file .env up -d --build
+#
+# Dataset directories must be writable by UID/GID 10001 (image user `agent`).
+# Do not use TrueNAS CORE Docker plugins — this path is SCALE Apps / Compose only.
 services:
   agent:
     volumes:

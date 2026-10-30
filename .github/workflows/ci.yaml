@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -44,5 +43,12 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compose config
+        run: docker compose -f compose.yaml config >/dev/null
+
       - name: Build image
-        run: docker compose build
+        run: docker compose -f compose.yaml build
+
+      - name: TrueNAS override config
+        run: docker compose -f compose.yaml -f compose.truenas.yaml config >/dev/null

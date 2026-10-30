@@ -1,26 +1,26 @@
 # Dividend Income + Covered Call Agent
 
-Paper-only autonomous agent that researches established U.S. dividend equities, accumulates shares, and proposes **fully covered** calls inside an **Alpaca paper** account.
+Paper-only autonomous agent that researches established U.S. dividend equities, accumulates shares, and writes **fully covered** calls inside an **Alpaca paper** account — deployable on TrueNAS SCALE via Docker Compose.
 
-> **Not production-ready.** Paper-only vertical slice through M1 (broker read + SQLite ledger). There is **no live trading path**, no live credentials, and no live-trading toggle in v1. M1 does **not** submit orders.
+> **Not live trading.** There is **no live trading path**, no live credentials, and no live-trading toggle in v1. **Do not place live Alpaca API keys on the host.**
 
 ## Status
 
 | Milestone | State |
 |---|---|
 | M0 Repository skeleton | Done |
-| M1 Broker + ledger | Done (prior PR) |
-| M2 Research | Done (prior PR) |
-| M3 Options engine | Done (prior PR) |
-| M4 Paper execution | Done (prior PR) |
-| M5 Autonomous scheduler | In progress (this tree) |
-| M6 | See `docs/ARCHITECTURE.md` |
+| M1 Broker + ledger | Done |
+| M2 Research | Done |
+| M3 Options engine | Done |
+| M4 Paper execution | Done |
+| M5 Autonomous scheduler | Done |
+| M6 TrueNAS release | In progress (this tree) |
 
-Default operating mode: **`paper_dry_run`** — full decision pipeline later; never submits orders until explicitly promoted after guardrails are set.
+Default mode: **`paper_dry_run`** with **`TRADING_PAUSED=true`**.
 
-## Quickstart
+## Operator quickstart (no source edits)
 
-Requirements: Python **3.12+**, [uv](https://docs.astral.sh/uv/), Docker (optional).
+### Local / laptop
 
 ```bash
 git clone https://github.com/tkdlax/m3.git
@@ -29,61 +29,60 @@ cd m3
 make check
 uv run dividend-agent config validate config/strategy.example.yaml
 uv run dividend-agent health
-uv run dividend-agent broker verify-paper   # fails closed without paper creds
-# With ALPACA_PAPER_* set against paper-api.alpaca.markets:
-# uv run dividend-agent broker reconcile --db ./data/agent.sqlite3
-# uv run dividend-agent broker status --db ./data/agent.sqlite3
 ```
 
 ### Docker Compose (dry-run)
 
 ```bash
 cp .env.example .env
-# edit SEC_USER_AGENT; set Alpaca *paper* keys only when ready to reconcile
+# Set SEC_USER_AGENT; add ALPACA_PAPER_* only when ready (paper host only)
 docker compose up -d --build
 docker compose exec agent dividend-agent health
 docker compose exec agent dividend-agent config validate /config/strategy.yaml
 ```
 
-TrueNAS dataset mounts: see [docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT.md) and `compose.truenas.yaml`.
+### TrueNAS SCALE
+
+Follow **[docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT.md)** (datasets UID/GID **10001**, `compose.yaml` + `compose.truenas.yaml`).
+
+### Promote path (paper_auto)
+
+1. `config validate` → `broker verify-paper`
+2. Dry-run scheduler cycles; inspect `/reports`
+3. Set every null §21 limit in private `strategy.yaml`
+4. Set `mode: paper_auto` and `execution.auto_paper_orders_enabled: true`
+5. `config validate --check-auto-submit` → `./scripts/promote_paper_auto.sh …`
+6. Set `TRADING_PAUSED=false` only when intentionally enabling paper submits
+
+Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices: PROJECT_SPEC §21 / [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
 ## Safety model
 
 - **AI researches; deterministic code authorizes.**
-- **Paper-only.** Unverified paper → fail closed (no orders).
-- **Null §21 guardrails** (`max_position_pct`, cash reserve, option liquidity floors, etc.) block auto-submit until the operator sets them. Research/dry-run may still run.
-- Kill switch env: `TRADING_PAUSED=true` (default in Compose).
+- Unverified paper → fail closed (no orders).
+- Null §21 guardrails block auto-submit.
+- Kill switch: `TRADING_PAUSED` / `ops emergency-stop`.
 
 ## CLI
 
 | Command | Behavior |
 |---|---|
-| `dividend-agent version` | Print version |
-| `dividend-agent health` | Local health JSON |
-| `dividend-agent config validate PATH` | Schema + paper-only validation |
-| `dividend-agent config validate PATH --check-auto-submit` | Also fail if auto-submit blockers remain |
-| `dividend-agent broker verify-paper` | Attest paper account; **fails closed** without verified paper |
-| `dividend-agent broker reconcile [--db PATH]` | Sync account/positions/orders/activities → SQLite (no trades) |
-| `dividend-agent broker status [--db PATH]` | Show last ledger snapshot |
-| `dividend-agent ledger migrate [--db PATH]` | Apply SQLite migrations |
-| `dividend-agent research symbol TICKER` | SEC-backed cited issuer memo (accept/reject/review) |
-| `dividend-agent research screen TICKER` | Deterministic yield/52-week/liquidity screen |
-| `dividend-agent options evaluate CHAIN.json` | Covered-call gates → TradeIntents |
-| `dividend-agent trade status\|recover` | Local order lifecycle / restart recovery |
-| `dividend-agent approvals list\|approve\|reject` | Exception approval queue |
-| `dividend-agent scheduler run\|status` | Idempotent startup / trading-day / monthly / events |
-
-## Layout
-
-Package lives under `src/dividend_agent/` (see product layout in the project spec). Config examples: `config/strategy.example.yaml`. Docs: `docs/`.
+| `dividend-agent health` / `version` | Local health |
+| `dividend-agent config validate PATH [--check-auto-submit]` | Schema + paper-only; optional auto-submit blockers |
+| `dividend-agent broker verify-paper \| reconcile \| status` | Paper attestation + ledger sync |
+| `dividend-agent research symbol\|screen` | SEC-backed research |
+| `dividend-agent options evaluate` | Covered-call TradeIntents |
+| `dividend-agent trade status\|recover` | Order lifecycle |
+| `dividend-agent approvals list\|approve\|reject` | Exception queue |
+| `dividend-agent scheduler run\|status` | Idempotent jobs |
+| `dividend-agent ops record-promote \| emergency-stop` | Promote audit / kill-switch help |
 
 ## Documentation
 
-- [STRATEGY](docs/STRATEGY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [DECISION_POLICY](docs/DECISION_POLICY.md)
-- [RISK_AND_LIMITATIONS](docs/RISK_AND_LIMITATIONS.md) · [ALPACA_INTEGRATION](docs/ALPACA_INTEGRATION.md)
-- [RESEARCH_SOURCES](docs/RESEARCH_SOURCES.md) · [PROBABILITY_MODEL](docs/PROBABILITY_MODEL.md)
-- [OPERATIONS](docs/OPERATIONS.md) · [TRUENAS_DEPLOYMENT](docs/TRUENAS_DEPLOYMENT.md) · [SECURITY](docs/SECURITY.md)
-- Portable agent instructions: [SKILL.md](SKILL.md) · coding agents: [AGENTS.md](AGENTS.md)
+- [TRUENAS_DEPLOYMENT](docs/TRUENAS_DEPLOYMENT.md) · [OPERATIONS](docs/OPERATIONS.md) · [RELEASE_NOTES](docs/RELEASE_NOTES.md)
+- [STRATEGY](docs/STRATEGY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [ALPACA_INTEGRATION](docs/ALPACA_INTEGRATION.md)
+- [SECURITY](docs/SECURITY.md) · [RISK_AND_LIMITATIONS](docs/RISK_AND_LIMITATIONS.md)
+- [SKILL.md](SKILL.md) · [AGENTS.md](AGENTS.md)
 
 ## License
 
