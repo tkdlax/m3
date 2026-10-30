@@ -9,8 +9,9 @@ Paper-only autonomous agent that researches established U.S. dividend equities, 
 | Milestone | State |
 |---|---|
 | M0 Repository skeleton | Done |
-| M1 Broker + ledger | In progress (this tree) |
-| M2–M6 | See `docs/ARCHITECTURE.md` |
+| M1 Broker + ledger | Done (prior PR) |
+| M2 Research | In progress (this tree) |
+| M3–M6 | See `docs/ARCHITECTURE.md` |
 
 Default operating mode: **`paper_dry_run`** — full decision pipeline later; never submits orders until explicitly promoted after guardrails are set.
 
@@ -62,6 +63,8 @@ TrueNAS dataset mounts: see [docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT
 | `dividend-agent broker reconcile [--db PATH]` | Sync account/positions/orders/activities → SQLite (no trades) |
 | `dividend-agent broker status [--db PATH]` | Show last ledger snapshot |
 | `dividend-agent ledger migrate [--db PATH]` | Apply SQLite migrations |
+| `dividend-agent research symbol TICKER` | SEC-backed cited issuer memo (accept/reject/review) |
+| `dividend-agent research screen TICKER` | Deterministic yield/52-week/liquidity screen |
 
 ## Layout
 

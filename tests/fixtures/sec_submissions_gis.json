@@ -1,0 +1,22 @@
+{
+  "cik": "0000051462",
+  "entityType": "operating",
+  "sic": "2040",
+  "sicDescription": "Grain Mill Products",
+  "name": "GENERAL MILLS INC",
+  "tickers": ["GIS"],
+  "exchanges": ["NYSE"],
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0000051462-24-000055",
+        "0000051462-24-000040",
+        "0000051462-24-000012"
+      ],
+      "filingDate": ["2024-06-26", "2024-03-20", "2023-06-28"],
+      "reportDate": ["2024-05-26", "2024-02-25", "2023-05-28"],
+      "form": ["10-K", "10-Q", "10-K"],
+      "primaryDocument": ["gis-20240526.htm", "gis-20240225.htm", "gis-20230528.htm"]
+    }
+  }
+}
