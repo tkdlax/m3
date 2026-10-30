@@ -13,12 +13,16 @@ Modular Python application (`src/dividend_agent/`) with:
 - **Deploy** — TrueNAS SCALE Compose, datasets UID 10001, backup/restore, promote + emergency-stop runbook (M6)
 - **Storage** — SQLite WAL + migrations (M1)
 - **Scheduling / reporting** — unattended cadence (M5)
-- **Deploy** — Docker Compose on TrueNAS SCALE (M6)
+- **MCP control plane** — chat agents (Grok/Claude/Cursor) call allowlisted CLI tools only; no Alpaca secrets or order submit ([MCP_CONTROL_PLANE.md](MCP_CONTROL_PLANE.md))
 
 ```text
+Chat MCP (research/jobs/approvals-by-id)
+        │ docker exec / local CLI only
+        ▼
 Research (read-only) → Policy gates → TradeIntent → Validator → dry-run log | paper submit
                               ↑
                      null limits / unverified paper → fail closed
+Alpaca MCP/REST stays inside BrokerAdapter — not exposed to chat agents.
 ```
 
 ## Milestones

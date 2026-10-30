@@ -3,7 +3,8 @@
 ## Policy
 
 - **Paper only** in v1. No live endpoints, live credentials, or live-trading toggle.
-- Prefer the official **Alpaca MCP** server once capability names/schemas are verified for unattended paper operation (spec §7.1).
+- Prefer the official **Alpaca MCP** server once capability names/schemas are verified for unattended paper operation (spec §7.1) — **inside** the broker adapter, not as a chat-agent tool surface.
+- Chat agents use the **dividend-agent MCP control plane** ([MCP_CONTROL_PLANE.md](MCP_CONTROL_PLANE.md)): CLI wrappers only; no `ALPACA_*` to the client; no order-submit tools.
 - **REST adapter** (`AlpacaPaperAdapter`) implements verify, ledger reads, and **M4 paper submit** behind `BrokerAdapter`.
 - No silent paper/live switching. `ALPACA_PAPER_BASE_URL` must be a paper host; `https://api.alpaca.markets` is rejected.
 - Unverified paper → fail closed; order batches re-verify before submit.

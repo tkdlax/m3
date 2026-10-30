@@ -1,0 +1,55 @@
+# Optional MCP control plane sidecar (chat agents → dividend-agent CLI only).
+# Usage:
+#   docker compose -f compose.yaml -f compose.mcp.yaml --env-file .env up -d --build
+# TrueNAS (+ datasets):
+#   docker compose -f compose.yaml -f compose.truenas.yaml -f compose.mcp.yaml \
+#     --env-file .env up -d --build
+#
+# Security model:
+# - Publishes ONLY on 127.0.0.1:8765 (loopback). Do not change to 0.0.0.0.
+# - MCP service does NOT load .env Alpaca keys (no env_file).
+# - Tools `docker exec` into container `dividend-agent`; paper secrets stay there.
+# - docker.sock is powerful — localhost / trusted host only; prefer stdio when possible.
+# - Set MCP_AUTH_TOKEN for intentional LAN reverse-proxy use (Bearer required).
+# Cursor / Claude Desktop stdio setup: docs/MCP_CONTROL_PLANE.md
+services:
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+      args:
+        IMAGE_TAG: ${IMAGE_TAG:-0.1.0}
+    image: dividend-agent-mcp:${IMAGE_TAG:-0.1.0}
+    container_name: dividend-agent-mcp
+    restart: unless-stopped
+    init: true
+    depends_on:
+      agent:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-America/Denver}
+      MCP_TRANSPORT: ${MCP_TRANSPORT:-streamable-http}
+      MCP_HOST: 127.0.0.1
+      MCP_PORT: "8765"
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      DIVIDEND_AGENT_MCP_BACKEND: docker
+      DIVIDEND_AGENT_MCP_CONTAINER: dividend-agent
+      DIVIDEND_AGENT_CONFIG_PATH: /config/strategy.yaml
+      DIVIDEND_AGENT_DB_PATH: /data/agent.sqlite3
+      DIVIDEND_AGENT_REPORTS_DIR: /reports
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:8765:8765"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
