@@ -41,10 +41,12 @@ config_app = typer.Typer(help="Strategy configuration commands.")
 broker_app = typer.Typer(help="Broker paper-verification and ledger commands.")
 ledger_app = typer.Typer(help="Local SQLite ledger status.")
 research_app = typer.Typer(help="SEC research and issuer screening (read-only).")
+options_app = typer.Typer(help="Covered-call evaluation (no order submission).")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
 app.add_typer(ledger_app, name="ledger")
 app.add_typer(research_app, name="research")
+app.add_typer(options_app, name="options")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -436,6 +438,119 @@ def research_screen_cmd(
     console.print_json(json.dumps(result.model_dump(mode="json")))
     if not result.accepted:
         raise typer.Exit(code=1)
+
+
+@options_app.command("evaluate")
+def options_evaluate_cmd(
+    chain_path: Annotated[
+        Path,
+        typer.Argument(help="Option chain JSON (fixture or broker export)."),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Strategy YAML."),
+    ] = Path("config/strategy.example.yaml"),
+    shares: Annotated[int, typer.Option(help="Shares owned.")] = 100,
+    wac: Annotated[float, typer.Option(help="Weighted-average cost per share.")] = 40.0,
+    reserved_calls: Annotated[
+        int, typer.Option(help="Shares already reserved by open short calls.")
+    ] = 0,
+    as_of: Annotated[
+        str | None, typer.Option(help="As-of date YYYY-MM-DD (default: chain as_of).")
+    ] = None,
+    ex_date: Annotated[
+        str | None, typer.Option(help="Next ex-dividend date YYYY-MM-DD (optional).")
+    ] = None,
+    set_liquidity_guardrails: Annotated[
+        bool,
+        typer.Option(
+            "--set-liquidity-guardrails/--no-set-liquidity-guardrails",
+            help=(
+                "For dry-run evaluation only: temporarily set example liquidity "
+                "thresholds so candidates can pass §21 gates. Does NOT write config "
+                "or enable auto-submit. Default off = fail closed on nulls."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Evaluate covered-call candidates; print intents/rejections. No orders."""
+    from datetime import date
+    from decimal import Decimal
+
+    from dividend_agent.options.chains import load_chain_json
+    from dividend_agent.options.ex_dividend import ExDividendWindow
+    from dividend_agent.portfolio.lots import CoverageState, ShareLot
+    from dividend_agent.strategy.candidate_selection import select_covered_call_intents
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if set_liquidity_guardrails:
+        # Explicit operator opt-in for local evaluation — not persisted; not auto-submit.
+        cfg = cfg.model_copy(
+            update={
+                "execution": cfg.execution.model_copy(
+                    update={
+                        "min_option_bid_usd_per_share": 0.05,
+                        "max_option_bid_ask_spread_pct": 0.50,
+                        "min_option_open_interest": 10,
+                    }
+                )
+            }
+        )
+
+    try:
+        chain = load_chain_json(chain_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        err_console.print(f"[red]chain error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    coverage = CoverageState(
+        symbol=chain.underlying,
+        lots=(ShareLot(qty=Decimal(shares), cost_per_share=Decimal(str(wac))),),
+        shares_reserved_by_open_calls=Decimal(reserved_calls),
+    )
+    from datetime import UTC, datetime, time
+
+    as_of_date = date.fromisoformat(as_of) if as_of else (chain.as_of or date.today())
+    # Anchor "now" to as_of so historical fixtures are not rejected as stale
+    # against wall-clock time during dry-run evaluation.
+    eval_now = datetime.combine(as_of_date, time(15, 0), tzinfo=UTC)
+    ex_window = (
+        ExDividendWindow(ex_date=date.fromisoformat(ex_date)) if ex_date else None
+    )
+    result = select_covered_call_intents(
+        config=cfg,
+        chain=chain,
+        coverage=coverage,
+        as_of=as_of_date,
+        now=eval_now,
+        ex_div=ex_window,
+    )
+    payload = {
+        "underlying": result.underlying,
+        "accepted_intents": len(result.intents),
+        "evaluations": [e.model_dump(mode="json") for e in result.evaluations],
+        "intents": [i.model_dump(mode="json") for i in result.intents],
+        "skipped": list(result.skipped),
+        "submission": "disabled_until_m4",
+        "liquidity_guardrails_overridden_in_memory": set_liquidity_guardrails,
+    }
+    console.print_json(json.dumps(payload))
+    if not result.intents:
+        err_console.print(
+            "[yellow]no accepted intents[/yellow] — see rejection_reasons "
+            "(null §21 liquidity guardrails fail closed unless "
+            "--set-liquidity-guardrails)."
+        )
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]ok[/green] {len(result.intents)} TradeIntent(s) proposed "
+        "(not submitted)."
+    )
 
 
 def main() -> None:

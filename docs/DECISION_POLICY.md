@@ -6,6 +6,23 @@ Machine-oriented rules and open operator decisions. **Do not invent permissive d
 
 Live destination; uncovered short call; strike below cost floor; unverified adjusted deliverable; insufficient buying power; stale/missing data; contradictory state; unsupported order type; missing audit; duplicate order; invalid options permission; broker/exchange restriction.
 
+### M3 covered-call gates (deterministic)
+
+Implemented in `options.gates` / `strategy.candidate_selection` (evaluate only — **no submission**):
+
+| Gate | Fail-closed behavior |
+|---|---|
+| Contract spec | Reject adjusted / non-100 deliverable |
+| Coverage | Reject if unencumbered shares < 100×contracts (open calls + pending sells reserve shares) |
+| Strike floor | `strike >= WAC` with Decimal compare (equality passes; one cent below fails) |
+| OTM at entry | Reject if strike ≤ spot when `require_out_of_money_at_entry` |
+| DTE | Must be within configured min/max |
+| Quote freshness | Stale/missing quote timestamp rejects |
+| Premium | Missing bid rejects |
+| Liquidity (§21) | `min_option_bid`, `max_spread`, `min_oi` **null ⇒ reject** (no invented defaults) |
+| Ex-dividend | `avoid_overlap`: missing calendar or overlap ⇒ reject |
+| Chance of Profit | Default floor 0.90; 0.80–0.90 band is **review** unless `aggressive_mode_enabled` |
+
 ## Approval-required exceptions
 
 Aggressive probability regime; ex-dividend-spanning call; unusual research; borderline issuer; premium/liquidity deviations; corporate actions; threshold changes; large position; ambiguous cost basis. Approvals never bypass hard blocks; must be action-specific, expiring, and revalidated.
