@@ -12,9 +12,14 @@
 
 ```bash
 dividend-agent config validate /config/strategy.yaml
-dividend-agent broker verify-paper    # must succeed before paper_auto (M1+)
+dividend-agent broker verify-paper
+dividend-agent broker reconcile --db /data/agent.sqlite3
+dividend-agent broker status --db /data/agent.sqlite3
+dividend-agent ledger migrate --db /data/agent.sqlite3
 dividend-agent health
 ```
+
+`broker reconcile` is read-only against Alpaca paper (no order submission). Without paper credentials it fails closed.
 
 ## Kill switch
 

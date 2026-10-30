@@ -17,6 +17,8 @@ uv sync --all-extras
 make lint typecheck test
 make config-validate
 ./scripts/smoke_test.sh
+uv run dividend-agent broker verify-paper
+uv run dividend-agent broker reconcile --db ./data/agent.sqlite3
 docker compose build
 ```
 

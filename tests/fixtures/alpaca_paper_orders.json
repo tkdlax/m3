@@ -1,0 +1,17 @@
+[
+  {
+    "id": "ord-001",
+    "client_order_id": "client-001",
+    "symbol": "GIS",
+    "side": "buy",
+    "type": "limit",
+    "status": "filled",
+    "qty": "100",
+    "filled_qty": "100",
+    "limit_price": "45.10",
+    "filled_avg_price": "45.10",
+    "asset_class": "us_equity",
+    "submitted_at": "2026-01-15T15:00:00Z",
+    "updated_at": "2026-01-15T15:01:00Z"
+  }
+]

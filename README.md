@@ -2,14 +2,14 @@
 
 Paper-only autonomous agent that researches established U.S. dividend equities, accumulates shares, and proposes **fully covered** calls inside an **Alpaca paper** account.
 
-> **Not production-ready.** M0 is a repository skeleton. There is **no live trading path**, no live credentials, and no live-trading toggle in v1.
+> **Not production-ready.** Paper-only vertical slice through M1 (broker read + SQLite ledger). There is **no live trading path**, no live credentials, and no live-trading toggle in v1. M1 does **not** submit orders.
 
 ## Status
 
 | Milestone | State |
 |---|---|
-| M0 Repository skeleton | In progress (this tree) |
-| M1 Broker + ledger | Not started |
+| M0 Repository skeleton | Done |
+| M1 Broker + ledger | In progress (this tree) |
 | M2–M6 | See `docs/ARCHITECTURE.md` |
 
 Default operating mode: **`paper_dry_run`** — full decision pipeline later; never submits orders until explicitly promoted after guardrails are set.
@@ -25,14 +25,17 @@ cd m3
 make check
 uv run dividend-agent config validate config/strategy.example.yaml
 uv run dividend-agent health
-uv run dividend-agent broker verify-paper   # fails closed until M1 verifies paper
+uv run dividend-agent broker verify-paper   # fails closed without paper creds
+# With ALPACA_PAPER_* set against paper-api.alpaca.markets:
+# uv run dividend-agent broker reconcile --db ./data/agent.sqlite3
+# uv run dividend-agent broker status --db ./data/agent.sqlite3
 ```
 
 ### Docker Compose (dry-run)
 
 ```bash
 cp .env.example .env
-# edit SEC_USER_AGENT; leave Alpaca keys empty for M0
+# edit SEC_USER_AGENT; set Alpaca *paper* keys only when ready to reconcile
 docker compose up -d --build
 docker compose exec agent dividend-agent health
 docker compose exec agent dividend-agent config validate /config/strategy.yaml
@@ -47,7 +50,7 @@ TrueNAS dataset mounts: see [docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT
 - **Null §21 guardrails** (`max_position_pct`, cash reserve, option liquidity floors, etc.) block auto-submit until the operator sets them. Research/dry-run may still run.
 - Kill switch env: `TRADING_PAUSED=true` (default in Compose).
 
-## CLI (M0)
+## CLI
 
 | Command | Behavior |
 |---|---|
@@ -55,7 +58,10 @@ TrueNAS dataset mounts: see [docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT
 | `dividend-agent health` | Local health JSON |
 | `dividend-agent config validate PATH` | Schema + paper-only validation |
 | `dividend-agent config validate PATH --check-auto-submit` | Also fail if auto-submit blockers remain |
-| `dividend-agent broker verify-paper` | Stub; **fails closed** without verified paper |
+| `dividend-agent broker verify-paper` | Attest paper account; **fails closed** without verified paper |
+| `dividend-agent broker reconcile [--db PATH]` | Sync account/positions/orders/activities → SQLite (no trades) |
+| `dividend-agent broker status [--db PATH]` | Show last ledger snapshot |
+| `dividend-agent ledger migrate [--db PATH]` | Apply SQLite migrations |
 
 ## Layout
 
