@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- MCP control plane for Grok/Claude/Cursor: allowlisted CLI tools only
+  (`src/dividend_agent/mcp_server/`), optional `compose.mcp.yaml` localhost sidecar,
+  `docs/MCP_CONTROL_PLANE.md`, `reports summary` CLI; no Alpaca secrets or order submit.
 - M6 TrueNAS release: hardened Compose (non-root, read-only root, no ports),
   entrypoint scheduler loop, backup/restore/promote scripts, SCALE deployment
   runbook, operator promote path, CI docker compose build, RELEASE_NOTES.

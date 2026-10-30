@@ -5,10 +5,12 @@
 | Path | Purpose |
 |---|---|
 | `src/dividend_agent/` | Application package |
+| `src/dividend_agent/mcp_server/` | Chat MCP control plane (CLI wrappers only) |
 | `config/` | Example strategy / logging YAML |
-| `docs/` | Strategy, architecture, ops |
+| `docs/` | Strategy, architecture, ops, MCP |
 | `tests/` | unit / integration / contract / scenarios |
 | `compose.yaml` | Dry-run Docker deployment |
+| `compose.mcp.yaml` | Optional localhost MCP sidecar |
 
 ## Commands
 
@@ -22,6 +24,8 @@ uv run dividend-agent broker reconcile --db ./data/agent.sqlite3
 uv run dividend-agent research screen GIS --trailing-yield 0.06 --price 40 \
   --week52-high 50 --week52-low 30 --avg-dollar-volume 1e7 --optionable
 docker compose build
+uv sync --extra mcp
+uv run dividend-agent-mcp   # stdio MCP; see docs/MCP_CONTROL_PLANE.md
 ```
 
 ## Style

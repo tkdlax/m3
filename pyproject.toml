@@ -24,9 +24,13 @@ dev = [
   "mypy>=1.11,<2",
   "types-PyYAML>=6.0,<7",
 ]
+mcp = [
+    "mcp>=1.12,<2",
+]
 
 [project.scripts]
 dividend-agent = "dividend_agent.cli:app"
+dividend-agent-mcp = "dividend_agent.mcp_server.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
