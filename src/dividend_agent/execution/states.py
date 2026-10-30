@@ -40,7 +40,14 @@ ALLOWED_TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
             OrderState.ERROR,
         }
     ),
-    OrderState.READY: frozenset({OrderState.SUBMITTED, OrderState.REJECTED, OrderState.ERROR}),
+    OrderState.READY: frozenset(
+        {
+            OrderState.SUBMITTED,
+            OrderState.REJECTED,
+            OrderState.ERROR,
+            OrderState.RECONCILIATION_NEEDED,
+        }
+    ),
     OrderState.SUBMITTED: frozenset(
         {
             OrderState.ACKNOWLEDGED,
@@ -69,6 +76,8 @@ ALLOWED_TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
     ),
     OrderState.RECONCILIATION_NEEDED: frozenset(
         {
+            OrderState.READY,
+            OrderState.SUBMITTED,
             OrderState.ACKNOWLEDGED,
             OrderState.FILLED,
             OrderState.CANCELED,
@@ -81,7 +90,9 @@ ALLOWED_TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
     OrderState.CANCELED: frozenset(),
     OrderState.REJECTED: frozenset(),
     OrderState.EXPIRED: frozenset(),
-    OrderState.ERROR: frozenset({OrderState.RECONCILIATION_NEEDED}),
+    OrderState.ERROR: frozenset(
+        {OrderState.RECONCILIATION_NEEDED, OrderState.READY, OrderState.REJECTED}
+    ),
 }
 
 
@@ -113,5 +124,24 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
         "paper_not_verified",
         "trading_paused",
         "live_trading_forbidden",
+        "missing_coverage",
+        "missing_wac",
+        "missing_strike",
+        "missing_underlying",
+        "missing_deliverable_shares",
+        "invalid_quantity",
+        "account_mismatch",
+        "underlying_mismatch",
+        "unsupported_order_type",
+        "unsupported_side_for_covered_call",
+        "account_restricted",
+        "insufficient_options_permission",
+        "order_notional_exceeded",
+        "stock_order_notional_exceeded",
+        "issuer_allocation_exceeded",
+        "cash_reserve_breach",
+        "missing_limit_price_for_notional_check",
+        "reservation_conflict",
+        "account_state_unavailable",
     }
 )

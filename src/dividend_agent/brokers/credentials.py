@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from dividend_agent.brokers.interface import BrokerConfigError
 
 DEFAULT_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
+CANONICAL_PAPER_HOST = "paper-api.alpaca.markets"
 
 
 @dataclass(frozen=True)
@@ -26,26 +28,50 @@ def normalize_base_url(url: str) -> str:
 
 
 def assert_paper_base_url(base_url: str) -> str:
-    """Fail closed if the URL looks like Alpaca live trading."""
+    """Fail closed unless the URL is exactly the Alpaca paper REST endpoint.
+
+    Validates scheme, hostname, port, userinfo, and path. Mock/test transports
+    must not use this helper — they bypass HTTP entirely (``FakePaperBroker``).
+    """
     normalized = normalize_base_url(base_url)
-    lower = normalized.lower()
-    if not lower.startswith("https://"):
+    parsed = urlparse(normalized)
+
+    if parsed.scheme.lower() != "https":
         raise BrokerConfigError(f"broker base URL must use https; got {normalized!r}")
-    # Explicit live host rejection.
-    if "api.alpaca.markets" in lower and "paper-api.alpaca.markets" not in lower:
+    if parsed.username is not None or parsed.password is not None:
+        raise BrokerConfigError(f"broker base URL must not include userinfo: {normalized!r}")
+    if parsed.query or parsed.fragment:
+        raise BrokerConfigError(f"broker base URL must not include query/fragment: {normalized!r}")
+
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise BrokerConfigError(f"broker base URL missing hostname: {normalized!r}")
+
+    # Exact paper host only — no substring / lookalike hosts.
+    if host == "api.alpaca.markets":
         raise BrokerConfigError(
             "live Alpaca endpoint rejected (paper-only v1): "
             f"{normalized!r}. Use https://paper-api.alpaca.markets"
         )
-    if "paper-api.alpaca.markets" in lower:
-        return normalized
-    if "paper" in lower:
-        # Allow test doubles whose host includes 'paper'.
-        return normalized
-    raise BrokerConfigError(
-        "broker base URL is not a recognized Alpaca paper endpoint: "
-        f"{normalized!r}. Expected host paper-api.alpaca.markets."
-    )
+    if host != CANONICAL_PAPER_HOST:
+        raise BrokerConfigError(
+            "broker base URL is not the exact Alpaca paper endpoint: "
+            f"{normalized!r}. Expected host {CANONICAL_PAPER_HOST}."
+        )
+
+    if parsed.port is not None and parsed.port != 443:
+        raise BrokerConfigError(
+            f"broker base URL must use default https port 443; got {normalized!r}"
+        )
+
+    path = parsed.path or ""
+    if path not in {"", "/"}:
+        # Allow only empty path on the paper host (API paths are appended by client).
+        raise BrokerConfigError(
+            f"broker base URL must not include an unexpected path: {normalized!r}"
+        )
+
+    return f"https://{CANONICAL_PAPER_HOST}"
 
 
 def load_alpaca_paper_credentials_from_env(

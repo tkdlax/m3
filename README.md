@@ -58,10 +58,11 @@ Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices
 
 ## Safety model
 
-- **AI researches; deterministic code authorizes.**
+- **AI researches; deterministic code authorizes** (gateway derives coverage/WAC; agent has no write secrets).
 - Unverified paper → fail closed (no orders).
-- Null §21 guardrails block auto-submit.
-- Kill switch: `TRADING_PAUSED` / `ops emergency-stop`.
+- Null §21 guardrails block auto-submit; resolved limits are enforced numerically at submit.
+- Kill switch: `TRADING_PAUSED` / `ops emergency-stop` (invalid values = paused).
+- Exact Alpaca paper URL only (`paper-api.alpaca.markets`).
 
 ## CLI
 
