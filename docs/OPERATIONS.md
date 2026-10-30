@@ -31,6 +31,8 @@ No source-code edits required — only private config + env:
 5. Set `TRADING_PAUSED=false` in `.env` and recreate/restart the agent.
 6. `broker verify-paper` then monitor `scheduler status` / `/reports`.
 
+Paper secrets (`ALPACA_PAPER_*`) must live in `.env` only; do not export empty `ALPACA_*` in the shell.
+
 **§21 numeric fields that must be non-null before auto-submit:**  
 `max_position_pct`, `max_portfolio_order_notional_usd`, `min_cash_reserve_usd`, `min_option_bid_usd_per_share`, `max_option_bid_ask_spread_pct`, `min_option_open_interest`, `max_new_stock_order_notional_usd`.
 

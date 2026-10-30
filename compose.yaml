@@ -12,14 +12,12 @@ services:
     user: "10001:10001"
     init: true
     stop_grace_period: 30s
+    # Paper secrets (ALPACA_PAPER_*, SEC_USER_AGENT) come only from env_file.
+    # Do not re-list them under environment: — empty ${VAR:-} interpolation
+    # injects "" and overrides env_file (Compose precedence).
     environment:
       TZ: ${TZ:-America/Denver}
       TRADING_PAUSED: ${TRADING_PAUSED:-true}
-      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
-      # Paper credentials only — never put live keys here for v1.
-      ALPACA_PAPER_API_KEY: ${ALPACA_PAPER_API_KEY:-}
-      ALPACA_PAPER_API_SECRET: ${ALPACA_PAPER_API_SECRET:-}
-      ALPACA_PAPER_BASE_URL: ${ALPACA_PAPER_BASE_URL:-https://paper-api.alpaca.markets}
       CONFIG_PATH: /config/strategy.yaml
       DB_PATH: /data/agent.sqlite3
       REPORTS_DIR: /reports
@@ -29,8 +27,7 @@ services:
       # Set true only after paper credentials are configured and verified.
       REQUIRE_PAPER_ON_START: ${REQUIRE_PAPER_ON_START:-false}
     env_file:
-      - path: .env
-        required: false
+      - .env
     volumes:
       - agent-data:/data
       - agent-reports:/reports
