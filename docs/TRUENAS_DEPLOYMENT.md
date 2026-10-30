@@ -44,6 +44,7 @@ cp .env.example .env
 ```
 
 Store `.env` on the host dataset or in SCALE secret fields — not in Git.
+Secrets (`ALPACA_PAPER_*`, `SEC_USER_AGENT`) must be in `.env`; do not export empty `ALPACA_*` in the shell (Compose would otherwise pass blanks into the container).
 
 ## 3. Bring up (dry-run)
 

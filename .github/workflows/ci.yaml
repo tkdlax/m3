@@ -44,6 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare .env for compose env_file
+        run: cp .env.example .env
+
       - name: Compose config
         run: docker compose -f compose.yaml config >/dev/null
 
