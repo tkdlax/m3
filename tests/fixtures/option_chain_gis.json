@@ -1,0 +1,56 @@
+{
+  "underlying": "GIS",
+  "underlying_price": "42.00",
+  "as_of": "2026-03-01",
+  "source": "fixture",
+  "options": [
+    {
+      "symbol": "GIS260401C00045000",
+      "underlying": "GIS",
+      "expiration": "2026-04-01",
+      "strike": "45.00",
+      "right": "call",
+      "multiplier": 100,
+      "deliverable_shares": 100,
+      "adjusted": false,
+      "tradable": true,
+      "status": "active",
+      "instrument_id": "opt-gis-45c",
+      "bid": "0.55",
+      "ask": "0.65",
+      "open_interest": 500,
+      "volume": 120,
+      "implied_volatility": "0.15",
+      "quote_as_of": "2026-03-01T15:00:00+00:00"
+    },
+    {
+      "symbol": "GIS260401C00040000",
+      "underlying": "GIS",
+      "expiration": "2026-04-01",
+      "strike": "40.00",
+      "right": "call",
+      "multiplier": 100,
+      "deliverable_shares": 100,
+      "bid": "2.10",
+      "ask": "2.30",
+      "open_interest": 800,
+      "implied_volatility": "0.25",
+      "quote_as_of": "2026-03-01T15:00:00+00:00"
+    },
+    {
+      "symbol": "GIS260401C00045000ADJ",
+      "underlying": "GIS",
+      "expiration": "2026-04-01",
+      "strike": "45.00",
+      "right": "call",
+      "multiplier": 100,
+      "deliverable_shares": 150,
+      "adjusted": true,
+      "bid": "0.40",
+      "ask": "0.50",
+      "open_interest": 50,
+      "implied_volatility": "0.22",
+      "quote_as_of": "2026-03-01T15:00:00+00:00"
+    }
+  ]
+}

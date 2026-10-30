@@ -9,6 +9,7 @@ Faithful summary of the investor philosophy. Implementation defaults that are st
 - Sell **fully covered** calls (~30 DTE), strike at/above **weighted-average acquisition cost**, normally OTM, targeting modeled Chance of Profit ≥ **90%** (aggressive 80%–<90% regime off by default).
 - No forced monthly trading; holding for dividends is valid when no qualifying call exists.
 - Avoid opening calls that span a known ex-dividend date unless an **explicit, tested** policy later permits it (currently `avoid_overlap`).
+- M3 evaluates chains into explainable `TradeIntent`s; **order submission is M4**. Adjusted deliverables are rejected until fully supported.
 
 ## Non-guarantees
 

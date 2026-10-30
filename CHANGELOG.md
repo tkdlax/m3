@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- M3 options engine: chain parsing, contract/deliverable validation, BS terminal COP/OTM
+  model, WAC/coverage/ex-div/stale-quote/liquidity hard gates, explainable TradeIntents,
+  CLI `options evaluate`. No order submission. §21 liquidity nulls fail closed.
 - M2 research: SEC EDGAR client (User-Agent, cache, rate limit, citations), company facts,
   declared/forecast dividend labeling, screener, deterministic memos + `ResearchAgent`,
   SQLite issuers/filings/memos, CLI `research symbol|screen`. Missing data fails closed.
