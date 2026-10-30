@@ -117,9 +117,7 @@ def evaluate_covered_call_candidate(
     # --- WAC strike floor (Decimal, unrounded compare) ---
     wac = coverage.weighted_average_cost
     if wac is None:
-        gates.append(
-            GateResult(name="strike_floor", status="missing", detail="wac_unavailable")
-        )
+        gates.append(GateResult(name="strike_floor", status="missing", detail="wac_unavailable"))
         reasons.append("missing_wac")
     elif contract.strike < wac:
         gates.append(
@@ -206,14 +204,10 @@ def evaluate_covered_call_candidate(
     # --- premium / liquidity (§21 nulls fail closed — no permissive invent) ---
     premium = quote.premium_per_share_conservative
     if premium is None:
-        gates.append(
-            GateResult(name="premium", status="missing", detail="bid_missing_fail_closed")
-        )
+        gates.append(GateResult(name="premium", status="missing", detail="bid_missing_fail_closed"))
         reasons.append("missing_bid_premium")
     else:
-        gates.append(
-            GateResult(name="premium", status="pass", detail=f"bid={premium}")
-        )
+        gates.append(GateResult(name="premium", status="pass", detail=f"bid={premium}"))
         evidence.append(f"premium_bid:{premium}")
 
     liq_reasons = _liquidity_gates(exec_cfg, quote, premium, gates)
@@ -226,9 +220,7 @@ def evaluate_covered_call_candidate(
         expiration=contract.expiration,
         window=ex_div,
     )
-    gates.append(
-        GateResult(name="ex_dividend", status=ex_result.status, detail=ex_result.detail)
-    )
+    gates.append(GateResult(name="ex_dividend", status=ex_result.status, detail=ex_result.detail))
     if not ex_result.allowed:
         reasons.append(ex_result.detail)
 
@@ -255,14 +247,9 @@ def evaluate_covered_call_candidate(
                 )
             )
             floor = Decimal(str(cc.chance_of_profit_min))
-            if (
-                not cc.aggressive_mode_enabled
-                and probability.chance_of_profit < floor
-            ):
+            if not cc.aggressive_mode_enabled and probability.chance_of_profit < floor:
                 # Aggressive band not auto-enabled
-                if probability.chance_of_profit >= Decimal(
-                    str(cc.aggressive_probability_floor)
-                ):
+                if probability.chance_of_profit >= Decimal(str(cc.aggressive_probability_floor)):
                     gates.append(
                         GateResult(
                             name="chance_of_profit",
@@ -303,9 +290,7 @@ def evaluate_covered_call_candidate(
                 evidence.append(f"cop:{probability.chance_of_profit}")
                 evidence.append(f"p_otm:{probability.prob_expire_otm}")
         except ProbabilityModelError as exc:
-            gates.append(
-                GateResult(name="chance_of_profit", status="missing", detail=str(exc))
-            )
+            gates.append(GateResult(name="chance_of_profit", status="missing", detail=str(exc)))
             reasons.append("probability_inputs_invalid")
     else:
         gates.append(
@@ -381,9 +366,7 @@ def _liquidity_gates(
         spread = quote.bid_ask_spread_pct
         if spread is None:
             gates.append(
-                GateResult(
-                    name="bid_ask_spread", status="missing", detail="spread_unavailable"
-                )
+                GateResult(name="bid_ask_spread", status="missing", detail="spread_unavailable")
             )
             reasons.append("missing_spread")
         elif spread > Decimal(str(max_spread)):
@@ -396,9 +379,7 @@ def _liquidity_gates(
             )
             reasons.append("spread_too_wide")
         else:
-            gates.append(
-                GateResult(name="bid_ask_spread", status="pass", detail=str(spread))
-            )
+            gates.append(GateResult(name="bid_ask_spread", status="pass", detail=str(spread)))
 
     if min_oi is None:
         gates.append(
@@ -410,9 +391,7 @@ def _liquidity_gates(
         )
         reasons.append("unresolved_guardrail:min_option_open_interest")
     elif quote.open_interest is None:
-        gates.append(
-            GateResult(name="open_interest", status="missing", detail="oi_missing")
-        )
+        gates.append(GateResult(name="open_interest", status="missing", detail="oi_missing"))
         reasons.append("missing_open_interest")
     elif quote.open_interest < int(min_oi):
         gates.append(

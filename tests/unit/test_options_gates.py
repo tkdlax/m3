@@ -213,6 +213,5 @@ def test_selection_produces_explainable_intent() -> None:
     # Below-cost / ITM / adjusted should appear in skipped with reasons
     assert any("ADJ" in s or "adjusted" in s for s in result.skipped)
     assert any(
-        "40.00" in e.contract_symbol or e.strike == Decimal("40")
-        for e in result.evaluations
+        "40.00" in e.contract_symbol or e.strike == Decimal("40") for e in result.evaluations
     )

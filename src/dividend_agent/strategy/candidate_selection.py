@@ -56,9 +56,7 @@ def select_covered_call_intents(
         )
         evaluations.append(evaluation)
         if not evaluation.accepted:
-            skipped.append(
-                f"{entry.contract.symbol}: " + ",".join(evaluation.rejection_reasons)
-            )
+            skipped.append(f"{entry.contract.symbol}: " + ",".join(evaluation.rejection_reasons))
             continue
         premium = evaluation.premium_per_share
         intent = TradeIntent(
@@ -78,14 +76,10 @@ def select_covered_call_intents(
             extras={
                 "underlying": coverage.symbol,
                 "chance_of_profit": (
-                    str(evaluation.probability.chance_of_profit)
-                    if evaluation.probability
-                    else None
+                    str(evaluation.probability.chance_of_profit) if evaluation.probability else None
                 ),
                 "prob_expire_otm": (
-                    str(evaluation.probability.prob_expire_otm)
-                    if evaluation.probability
-                    else None
+                    str(evaluation.probability.prob_expire_otm) if evaluation.probability else None
                 ),
                 "wac": str(evaluation.wac) if evaluation.wac is not None else None,
                 "gates": [g.model_dump() for g in evaluation.gates],

@@ -17,10 +17,7 @@ def validate_intent_coverage(
     deliverable = intent.deliverable_shares or 100
     needed = Decimal(deliverable) * intent.quantity
     if coverage.unencumbered_shares < needed:
-        reasons.append(
-            f"insufficient_unencumbered_shares:"
-            f"{coverage.unencumbered_shares}<{needed}"
-        )
+        reasons.append(f"insufficient_unencumbered_shares:{coverage.unencumbered_shares}<{needed}")
     wac = coverage.weighted_average_cost
     if intent.strike is not None and wac is not None and intent.strike < wac:
         reasons.append(f"strike_below_wac:{intent.strike}<{wac}")

@@ -8,7 +8,7 @@ Modular Python application (`src/dividend_agent/`) with:
 - **Brokers** — paper-only adapters; M1 REST (`AlpacaPaperAdapter`) with MCP preferred later; fail closed without positive paper verification
 - **Research** — SEC EDGAR + company facts + dividend labels + screener + cited memos (M2)
 - **Options / strategy** — chains, probability, WAC/coverage/ex-div gates, TradeIntent selection (M3)
-- **Execution** — reconciliation (M1, read-only); intent validation (M3); idempotent paper orders + approval queue (M4); null guardrails block auto-submit
+- **Execution** — reconciliation (M1); intent validation (M3); idempotent paper orders, approvals, kill switch (M4); null guardrails block auto-submit
 - **Storage** — SQLite WAL + migrations (M1)
 - **Scheduling / reporting** — unattended cadence (M5)
 - **Deploy** — Docker Compose on TrueNAS SCALE (M6)

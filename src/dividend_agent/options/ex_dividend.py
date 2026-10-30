@@ -57,9 +57,7 @@ def evaluate_ex_dividend_policy(
             detail="ex_dividend_unknown_requires_review",
         )
 
-    spans = call_spans_ex_dividend(
-        as_of=as_of, expiration=expiration, ex_date=window.ex_date
-    )
+    spans = call_spans_ex_dividend(as_of=as_of, expiration=expiration, ex_date=window.ex_date)
     if not spans:
         return ExDivCheckResult(
             allowed=True,

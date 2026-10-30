@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- M4 paper execution: order state machine, client-order-id idempotency, timeout
+  lookup-before-retry, approval queue (hard blocks never approvable), kill switch,
+  paper verify before submit, CLI trade/approvals. No live trading path.
 - M3 options engine: chain parsing, contract/deliverable validation, BS terminal COP/OTM
   model, WAC/coverage/ex-div/stale-quote/liquidity hard gates, explainable TradeIntents,
   CLI `options evaluate`. No order submission. §21 liquidity nulls fail closed.
