@@ -51,7 +51,7 @@ def run_jobs(
     conn = open_migrated(db_path)
     results: list[JobResult] = []
     try:
-        with SchedulerLock(conn):
+        with SchedulerLock(conn) as lock:
             runner = SchedulerRunner(conn)
             deps = JobDeps(
                 config=config,
@@ -63,6 +63,7 @@ def run_jobs(
             )
             register_default_jobs(runner, deps)
             for name in job_names:
+                lock.renew()
                 pk = (period_keys or {}).get(name) or default_period_for(name)
                 results.append(runner.run(name, pk, force=force))
     finally:

@@ -10,7 +10,7 @@
 
 ## Kill switch / emergency stop
 
-Set `TRADING_PAUSED=true` (Compose default). Blocks new order submission and trading-day recovery submits; **research, reconciliation, reporting, and alerts continue**.
+Set `TRADING_PAUSED=true` (Compose default). Blocks new order submission and trading-day recovery submits; **research, reconciliation, reporting, and alerts continue**. Only `false`/`0`/`no`/`off` unpause; any other value (including typos) is treated as **paused**.
 
 ```bash
 dividend-agent ops emergency-stop

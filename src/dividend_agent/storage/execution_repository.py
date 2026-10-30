@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -147,6 +148,109 @@ class ExecutionRepository:
             WHERE client_order_id = ? AND status = 'pending'
             ORDER BY created_at DESC LIMIT 1
             """,
+            (client_order_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def try_reserve_shares(
+        self,
+        *,
+        reservation_id: str,
+        client_order_id: str,
+        account_id: str,
+        underlying: str,
+        shares: str,
+        available_unencumbered: str,
+    ) -> bool:
+        """Atomically reserve shares if capacity remains.
+
+        Uses an immediate transaction and a capacity check against active
+        reservations so concurrent workers cannot over-commit the same shares.
+        ``available_unencumbered`` is broker-derived capacity *before* local
+        active reservations (those are summed inside the transaction).
+        """
+        now = _now()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                """
+                SELECT COALESCE(SUM(CAST(shares AS REAL)), 0) AS reserved
+                FROM share_reservations
+                WHERE account_id = ? AND underlying = ? AND status = 'active'
+                """,
+                (account_id, underlying.upper()),
+            ).fetchone()
+            already = float(row["reserved"] if row else 0)
+            needed = float(shares)
+            avail = float(available_unencumbered)
+            if already + needed > avail + 1e-9:
+                self._conn.execute("ROLLBACK")
+                return False
+            existing = self._conn.execute(
+                "SELECT reservation_id, status FROM share_reservations WHERE client_order_id = ?",
+                (client_order_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["status"] == "active":
+                    self._conn.execute("COMMIT")
+                    return True
+                self._conn.execute(
+                    """
+                    UPDATE share_reservations
+                    SET status = 'active', shares = ?, updated_at = ?, reservation_id = ?
+                    WHERE client_order_id = ?
+                    """,
+                    (shares, now, reservation_id, client_order_id),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO share_reservations (
+                        reservation_id, client_order_id, account_id, underlying,
+                        shares, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+                    """,
+                    (
+                        reservation_id,
+                        client_order_id,
+                        account_id,
+                        underlying.upper(),
+                        shares,
+                        now,
+                        now,
+                    ),
+                )
+            self._conn.execute("COMMIT")
+            return True
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._conn.execute("ROLLBACK")
+            raise
+
+    def release_reservation(self, client_order_id: str, *, status: str = "released") -> None:
+        self._conn.execute(
+            """
+            UPDATE share_reservations
+            SET status = ?, updated_at = ?
+            WHERE client_order_id = ? AND status = 'active'
+            """,
+            (status, _now(), client_order_id),
+        )
+
+    def active_reserved_shares(self, *, account_id: str, underlying: str) -> str:
+        row = self._conn.execute(
+            """
+            SELECT COALESCE(SUM(CAST(shares AS REAL)), 0) AS reserved
+            FROM share_reservations
+            WHERE account_id = ? AND underlying = ? AND status = 'active'
+            """,
+            (account_id, underlying.upper()),
+        ).fetchone()
+        return str(row["reserved"] if row else 0)
+
+    def get_reservation(self, client_order_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM share_reservations WHERE client_order_id = ?",
             (client_order_id,),
         ).fetchone()
         return dict(row) if row else None

@@ -33,6 +33,11 @@ class FakePaperBroker(BrokerAdapter):
         fail_submit_times: int = 0,
         timeout_after_accept_once: bool = False,
         verified: bool = True,
+        cash: Decimal = Decimal("100000"),
+        equity: Decimal = Decimal("100000"),
+        positions: list[PositionSnapshot] | None = None,
+        options_approved_level: int | None = 3,
+        fail_lookup: bool = False,
     ) -> None:
         self.account_id = account_id
         self._fail_submit_times = fail_submit_times
@@ -42,6 +47,14 @@ class FakePaperBroker(BrokerAdapter):
         self._orders_by_broker: dict[str, OrderSnapshot] = {}
         self._verified = verified
         self.submit_count = 0
+        self._cash = cash
+        self._equity = equity
+        self._positions = list(positions or [])
+        self._options_approved_level = options_approved_level
+        self._fail_lookup = fail_lookup
+
+    def set_positions(self, positions: list[PositionSnapshot]) -> None:
+        self._positions = list(positions)
 
     def verify_paper(self) -> PaperVerificationResult:
         if not self._verified:
@@ -63,17 +76,22 @@ class FakePaperBroker(BrokerAdapter):
         return AccountSnapshot(
             account_id=self.account_id,
             status="ACTIVE",
-            cash=Decimal("100000"),
-            buying_power=Decimal("100000"),
-            equity=Decimal("100000"),
-            portfolio_value=Decimal("100000"),
+            cash=self._cash,
+            buying_power=self._cash,
+            equity=self._equity,
+            portfolio_value=self._equity,
+            options_approved_level=self._options_approved_level,
         )
 
     def list_positions(self) -> list[PositionSnapshot]:
-        return []
+        return list(self._positions)
 
     def list_orders(self, *, status: str = "all", limit: int = 100) -> list[OrderSnapshot]:
-        return list(self._orders_by_broker.values())[:limit]
+        orders = list(self._orders_by_broker.values())
+        if status == "open":
+            open_statuses = {"new", "accepted", "pending_new", "partially_filled", "held", "open"}
+            orders = [o for o in orders if (o.status or "").lower() in open_statuses]
+        return orders[:limit]
 
     def list_activities(
         self,
@@ -118,6 +136,8 @@ class FakePaperBroker(BrokerAdapter):
         return order
 
     def get_order_by_client_id(self, client_order_id: str) -> OrderSnapshot | None:
+        if self._fail_lookup:
+            raise BrokerTransportError("simulated lookup failure")
         return self._orders_by_client.get(client_order_id)
 
     def cancel_paper_order(self, broker_order_id: str) -> OrderSnapshot:

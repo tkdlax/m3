@@ -48,3 +48,16 @@ Until resolved, the system may research, screen, recommend, simulate, and report
 11. Definition of a successful paper trial and observation period before any future live consideration.
 
 Mapped null YAML keys today: `execution.max_position_pct`, `max_portfolio_order_notional_usd`, `min_cash_reserve_usd`, `min_option_bid_usd_per_share`, `max_option_bid_ask_spread_pct`, `min_option_open_interest`, `max_new_stock_order_notional_usd`.
+
+### Numeric limit semantics (Milestone A gateway)
+
+Once non-null, the gateway enforces:
+
+| Field | Semantics |
+|---|---|
+| `max_portfolio_order_notional_usd` | Covered-call **premium** notional = contracts × deliverable × limit |
+| `max_new_stock_order_notional_usd` | Stock buy/sell notional = qty × limit |
+| `max_position_pct` | Issuer equity market value / account equity (calls blocked if already over) |
+| `min_cash_reserve_usd` | Cash remaining after stock buys must stay ≥ reserve |
+
+Still unresolved until operator chooses values: worthwhile premium floors, diversification beyond issuer %, automatic stock-buy authority, etc.

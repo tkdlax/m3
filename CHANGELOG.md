@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Milestone A gateway enforcement: independent coverage/WAC before submit/approve/retry,
+  atomic share reservations, numeric §21 limit checks, exact paper URL validation,
+  fail-closed `TRADING_PAUSED`, atomic scheduler lease acquire/renew, decision-stable
+  client order IDs, no duplicate submit on timeout/lookup ambiguity.
 - M6 TrueNAS release: hardened Compose (non-root, read-only root, no ports),
   entrypoint scheduler loop, backup/restore/promote scripts, SCALE deployment
   runbook, operator promote path, CI docker compose build, RELEASE_NOTES.

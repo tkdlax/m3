@@ -1,7 +1,8 @@
-"""Single active execution worker lock (spec §13 / §15)."""
+"""Single active execution worker lock (spec §13 / §15) — atomic acquire/renew."""
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from datetime import timedelta
 from uuid import uuid4
@@ -14,7 +15,7 @@ class LockBusyError(RuntimeError):
 
 
 class SchedulerLock:
-    """SQLite-backed lease lock. Prevents duplicate concurrent schedulers."""
+    """SQLite-backed lease lock with atomic acquire and renewal."""
 
     def __init__(
         self,
@@ -30,34 +31,78 @@ class SchedulerLock:
         self.holder = holder or f"worker-{uuid4().hex[:12]}"
 
     def acquire(self) -> None:
-        now = now_utc()
+        """Atomically acquire or steal an expired lease.
+
+        Uses BEGIN IMMEDIATE plus a conditional write so two workers cannot both
+        observe an empty/expired row and both succeed.
+        """
+        now = now_utc().replace(microsecond=0)
         expires = now + timedelta(seconds=self.ttl_seconds)
-        row = self._conn.execute(
-            "SELECT holder, expires_at FROM scheduler_locks WHERE lock_name = ?",
-            (self.lock_name,),
-        ).fetchone()
-        if row is not None:
-            exp = row["expires_at"]
+        now_s = now.isoformat()
+        exp_s = expires.isoformat()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT holder, expires_at FROM scheduler_locks WHERE lock_name = ?",
+                (self.lock_name,),
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO scheduler_locks (lock_name, holder, acquired_at, expires_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (self.lock_name, self.holder, now_s, exp_s),
+                )
+                self._conn.execute("COMMIT")
+                return
             holder = row["holder"]
-            # Expired lease can be stolen
-            if holder != self.holder and str(exp) > now.replace(microsecond=0).isoformat():
+            exp = str(row["expires_at"])
+            if holder != self.holder and exp > now_s:
+                self._conn.execute("ROLLBACK")
                 raise LockBusyError(f"scheduler lock held by {holder} until {exp}")
-        self._conn.execute(
+            # Same holder renew, or expired lease steal — single UPDATE.
+            cur = self._conn.execute(
+                """
+                UPDATE scheduler_locks
+                SET holder = ?, acquired_at = ?, expires_at = ?
+                WHERE lock_name = ?
+                  AND (holder = ? OR expires_at <= ?)
+                """,
+                (self.holder, now_s, exp_s, self.lock_name, self.holder, now_s),
+            )
+            if cur.rowcount != 1:
+                self._conn.execute("ROLLBACK")
+                raise LockBusyError(f"scheduler lock race lost for {self.lock_name}")
+            self._conn.execute("COMMIT")
+        except LockBusyError:
+            raise
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._conn.execute("ROLLBACK")
+            raise
+
+    def renew(self) -> None:
+        """Extend lease TTL; fail closed if we no longer hold the lock."""
+        now = now_utc().replace(microsecond=0)
+        expires = now + timedelta(seconds=self.ttl_seconds)
+        cur = self._conn.execute(
             """
-            INSERT INTO scheduler_locks (lock_name, holder, acquired_at, expires_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(lock_name) DO UPDATE SET
-                holder=excluded.holder,
-                acquired_at=excluded.acquired_at,
-                expires_at=excluded.expires_at
+            UPDATE scheduler_locks
+            SET expires_at = ?
+            WHERE lock_name = ? AND holder = ? AND expires_at > ?
             """,
             (
+                expires.isoformat(),
                 self.lock_name,
                 self.holder,
-                now.replace(microsecond=0).isoformat(),
-                expires.replace(microsecond=0).isoformat(),
+                now.isoformat(),
             ),
         )
+        if cur.rowcount != 1:
+            raise LockBusyError(
+                f"scheduler lock renew failed for {self.holder} on {self.lock_name}"
+            )
 
     def release(self) -> None:
         self._conn.execute(

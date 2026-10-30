@@ -1,11 +1,13 @@
-"""Paper order lifecycle manager — idempotent submit, no live path (M4)."""
+"""Paper order lifecycle manager — idempotent submit, no live path (Milestone A)."""
 
 from __future__ import annotations
 
 import json
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from dividend_agent.brokers.interface import (
     BrokerAdapter,
@@ -17,9 +19,16 @@ from dividend_agent.brokers.orders import PaperOrderRequest
 from dividend_agent.config import AppConfig
 from dividend_agent.domain.models import OperatingMode, TradeIntent
 from dividend_agent.execution.approval_queue import ApprovalError, ApprovalQueue
+from dividend_agent.execution.authority import decision_client_order_id
+from dividend_agent.execution.coverage import (
+    broker_unencumbered_before_local,
+    derive_coverage,
+    underlying_from_intent,
+)
 from dividend_agent.execution.guardrails import (
     NullGuardrailError,
     assert_guardrails_resolved_for_auto_submit,
+    numeric_limit_violations,
 )
 from dividend_agent.execution.kill_switch import (
     TradingPausedError,
@@ -36,7 +45,11 @@ class OrderManagerError(RuntimeError):
 
 
 class OrderManager:
-    """Single-worker paper execution with client-order-id idempotency."""
+    """Single-worker paper execution with decision-stable client-order-id idempotency.
+
+    Broker write credentials and submit calls stay on this gateway path. Callers
+    must not bypass ``OrderManager`` to reach ``submit_paper_order``.
+    """
 
     def __init__(
         self,
@@ -51,11 +64,12 @@ class OrderManager:
         self._broker = broker
         self._repo = repo
         self._approvals = approvals or ApprovalQueue(repo)
+        # Overlay for tests; pause is still re-read from live os.environ on submit.
         self._environ = environ if environ is not None else dict(os.environ)
 
     def client_order_id_for_intent(self, intent: TradeIntent) -> str:
-        """Stable idempotency key derived from intent id (restart-safe)."""
-        return f"da-{intent.intent_id.hex}"
+        """Stable idempotency key from logical decision identity (restart-safe)."""
+        return decision_client_order_id(intent)
 
     def process_intent(
         self,
@@ -76,8 +90,14 @@ class OrderManager:
         }:
             return existing
 
+        # Always prefer independently derived coverage; caller-supplied coverage
+        # is only a fallback when the broker cannot be queried (tests).
+        effective = self._resolve_coverage(intent, coverage, client_order_id=client_order_id)
         hard_reasons, soft_reasons = self._classify_blocks(
-            intent, coverage=coverage, exception_reasons=exception_reasons or []
+            intent,
+            coverage=effective,
+            exception_reasons=exception_reasons or [],
+            client_order_id=client_order_id,
         )
         now = _now()
         row = {
@@ -104,6 +124,7 @@ class OrderManager:
         self._transition(client_order_id, OrderState.PROPOSED, OrderState.VALIDATED)
 
         if hard_reasons:
+            self._repo.release_reservation(client_order_id, status="released")
             self._transition(
                 client_order_id,
                 OrderState.VALIDATED,
@@ -113,6 +134,15 @@ class OrderManager:
             return self._repo.get_order(client_order_id)  # type: ignore[return-value]
 
         if soft_reasons:
+            # Soft path still reserves shares so concurrent intents cannot reuse them.
+            if not self._try_reserve(intent, client_order_id):
+                self._transition(
+                    client_order_id,
+                    OrderState.VALIDATED,
+                    OrderState.REJECTED,
+                    detail="reservation_conflict",
+                )
+                return self._repo.get_order(client_order_id)  # type: ignore[return-value]
             approval_id = self._approvals.enqueue(
                 client_order_id=client_order_id,
                 approval_type="exception",
@@ -128,6 +158,15 @@ class OrderManager:
                 OrderState.VALIDATED,
                 OrderState.AWAITING_APPROVAL,
                 detail=f"approval_id={approval_id}",
+            )
+            return self._repo.get_order(client_order_id)  # type: ignore[return-value]
+
+        if not self._try_reserve(intent, client_order_id):
+            self._transition(
+                client_order_id,
+                OrderState.VALIDATED,
+                OrderState.REJECTED,
+                detail="reservation_conflict",
             )
             return self._repo.get_order(client_order_id)  # type: ignore[return-value]
 
@@ -192,20 +231,22 @@ class OrderManager:
             )
             raise
 
-        # Revalidate hard gates from stored intent before submit
         intent = TradeIntent.model_validate_json(row["intent_json"])
-        hard, _soft = self._classify_blocks(intent, coverage=None, exception_reasons=[])
-        # Coverage cannot be re-derived without lots — rely on prior hard_block flag
-        if row.get("hard_block"):
-            raise OrderManagerError("hard-blocked order cannot be submitted")
-        if hard:
+        hard, _soft = self._classify_blocks(
+            intent,
+            coverage=self._resolve_coverage(intent, None, client_order_id=client_order_id),
+            exception_reasons=[],
+            client_order_id=client_order_id,
+        )
+        if hard or row.get("hard_block"):
+            self._repo.release_reservation(client_order_id, status="released")
             self._transition(
                 client_order_id,
                 OrderState(row["state"]),
                 OrderState.REJECTED,
-                detail=";".join(hard),
+                detail=";".join(hard) if hard else "prior_hard_block",
             )
-            raise OrderManagerError(f"revalidation hard blocks: {hard}")
+            raise OrderManagerError(f"revalidation hard blocks: {hard or ['prior_hard_block']}")
 
         state = OrderState(row["state"])
         if state == OrderState.AWAITING_APPROVAL:
@@ -224,17 +265,18 @@ class OrderManager:
         return self._submit_with_idempotency(client_order_id, intent)
 
     def _submit_with_idempotency(self, client_order_id: str, intent: TradeIntent) -> dict[str, Any]:
-        # Before (re)submit: query broker by client order id
-        existing = None
+        # Before (re)submit: query broker by client order id. Lookup failure must
+        # preserve uncertainty — never treat it as proof of absence.
         try:
             existing = self._broker.get_order_by_client_id(client_order_id)
-        except Exception as exc:  # noqa: BLE001 — treat lookup failure as recon needed
+        except Exception as exc:  # noqa: BLE001
             self._transition(
                 client_order_id,
                 OrderState.SUBMITTED,
                 OrderState.RECONCILIATION_NEEDED,
                 detail=f"lookup_failed:{exc}",
             )
+            return self._repo.get_order(client_order_id)  # type: ignore[return-value]
 
         if existing is not None:
             self._apply_broker_snapshot(client_order_id, existing)
@@ -251,7 +293,8 @@ class OrderManager:
         try:
             snapshot = self._broker.submit_paper_order(request)
         except BrokerTransportError as exc:
-            # Timeout / network: query again before any retry
+            # Timeout / network: query again; empty confirmed lookup stays recon —
+            # do NOT retry submit (duplicate risk under ambiguous accept).
             self._repo.append_event(
                 client_order_id,
                 "submit_timeout",
@@ -259,7 +302,16 @@ class OrderManager:
                 to_state=OrderState.RECONCILIATION_NEEDED.value,
                 detail=str(exc),
             )
-            recovered = self._broker.get_order_by_client_id(client_order_id)
+            try:
+                recovered = self._broker.get_order_by_client_id(client_order_id)
+            except Exception as lookup_exc:  # noqa: BLE001
+                self._transition(
+                    client_order_id,
+                    OrderState.SUBMITTED,
+                    OrderState.RECONCILIATION_NEEDED,
+                    detail=f"timeout_lookup_failed:{lookup_exc}",
+                )
+                return self._repo.get_order(client_order_id)  # type: ignore[return-value]
             if recovered is not None:
                 self._apply_broker_snapshot(client_order_id, recovered)
                 return self._repo.get_order(client_order_id)  # type: ignore[return-value]
@@ -269,8 +321,7 @@ class OrderManager:
                 OrderState.RECONCILIATION_NEEDED,
                 detail="timeout_no_broker_order_yet",
             )
-            # Safe single retry after empty lookup
-            snapshot = self._broker.submit_paper_order(request)
+            return self._repo.get_order(client_order_id)  # type: ignore[return-value]
 
         self._apply_broker_snapshot(client_order_id, snapshot)
         return self._repo.get_order(client_order_id)  # type: ignore[return-value]
@@ -282,12 +333,36 @@ class OrderManager:
             raise OrderManagerError(f"unknown order {client_order_id}")
         verification = self._broker.verify_paper()
         require_verified_paper(verification)
-        existing = self._broker.get_order_by_client_id(client_order_id)
+        try:
+            existing = self._broker.get_order_by_client_id(client_order_id)
+        except Exception as exc:  # noqa: BLE001
+            self._transition(
+                client_order_id,
+                OrderState(row["state"]),
+                OrderState.RECONCILIATION_NEEDED,
+                detail=f"recovery_lookup_failed:{exc}",
+            )
+            return self._repo.get_order(client_order_id)  # type: ignore[return-value]
         if existing is not None:
             self._apply_broker_snapshot(client_order_id, existing)
             return self._repo.get_order(client_order_id)  # type: ignore[return-value]
-        # No broker order — safe to (re)submit once if still paper_auto
-        TradeIntent.model_validate_json(row["intent_json"])  # ensure payload still valid
+        # Confirmed absence — revalidate coverage before any resubmit.
+        intent = TradeIntent.model_validate_json(row["intent_json"])
+        hard, _ = self._classify_blocks(
+            intent,
+            coverage=self._resolve_coverage(intent, None, client_order_id=client_order_id),
+            exception_reasons=[],
+            client_order_id=client_order_id,
+        )
+        if hard:
+            self._repo.release_reservation(client_order_id, status="released")
+            self._transition(
+                client_order_id,
+                OrderState(row["state"]),
+                OrderState.REJECTED,
+                detail=";".join(hard),
+            )
+            raise OrderManagerError(f"recovery hard blocks: {hard}")
         self._transition(
             client_order_id,
             OrderState(row["state"]),
@@ -306,10 +381,15 @@ class OrderManager:
             raise OrderManagerError("order missing for approval")
         if row.get("hard_block"):
             raise ApprovalError("hard-blocked order cannot proceed after approval")
-        # Revalidate before moving to ready/submit
         intent = TradeIntent.model_validate_json(row["intent_json"])
-        hard, _ = self._classify_blocks(intent, coverage=None, exception_reasons=[])
+        hard, _ = self._classify_blocks(
+            intent,
+            coverage=self._resolve_coverage(intent, None, client_order_id=client_order_id),
+            exception_reasons=[],
+            client_order_id=client_order_id,
+        )
         if hard or row.get("hard_block"):
+            self._repo.release_reservation(client_order_id, status="released")
             self._transition(
                 client_order_id,
                 OrderState(row["state"]),
@@ -327,33 +407,109 @@ class OrderManager:
             return self.submit_ready_order(client_order_id)
         return self._repo.get_order(client_order_id)  # type: ignore[return-value]
 
+    def _resolve_coverage(
+        self,
+        intent: TradeIntent,
+        coverage: CoverageState | None,
+        *,
+        client_order_id: str | None,
+    ) -> CoverageState | None:
+        try:
+            derived = derive_coverage(
+                broker=self._broker,
+                repo=self._repo,
+                intent=intent,
+                exclude_client_order_id=client_order_id,
+            )
+        except Exception:  # noqa: BLE001 — derivation failure is missing coverage
+            derived = None
+        if derived is not None:
+            return derived
+        return coverage
+
+    def _try_reserve(self, intent: TradeIntent, client_order_id: str) -> bool:
+        underlying = underlying_from_intent(intent)
+        if underlying is None:
+            return False
+        deliverable = intent.deliverable_shares or 100
+        needed = Decimal(deliverable) * intent.quantity
+        avail = broker_unencumbered_before_local(broker=self._broker, intent=intent)
+        if avail is None:
+            return False
+        return self._repo.try_reserve_shares(
+            reservation_id=str(uuid4()),
+            client_order_id=client_order_id,
+            account_id=intent.account_id,
+            underlying=underlying,
+            shares=str(needed),
+            available_unencumbered=str(avail),
+        )
+
     def _classify_blocks(
         self,
         intent: TradeIntent,
         *,
         coverage: CoverageState | None,
         exception_reasons: list[str],
+        client_order_id: str | None = None,
     ) -> tuple[list[str], list[str]]:
         hard: list[str] = []
         soft: list[str] = list(exception_reasons)
-        if coverage is not None:
-            for reason in validate_intent_coverage(intent, coverage):
-                key = reason.split(":", 1)[0]
-                if key in HARD_BLOCK_REASONS or reason.startswith("strike_below_wac"):
-                    hard.append(
-                        "strike_below_wac"
-                        if "strike_below_wac" in reason
-                        else (
-                            "insufficient_unencumbered_shares"
-                            if "insufficient_unencumbered" in reason
-                            else reason
-                        )
-                    )
-                else:
-                    soft.append(reason)
-        # Live trading markers in extras
+
         if intent.extras.get("live") or intent.extras.get("environment") == "live":
             hard.append("live_destination")
+
+        if coverage is None:
+            hard.append("missing_coverage")
+            return hard, soft
+
+        expected_account: str | None = None
+        try:
+            account = self._broker.get_account()
+            expected_account = account.account_id
+            positions = self._broker.list_positions()
+            for reason in numeric_limit_violations(
+                config=self._config,
+                intent=intent,
+                account=account,
+                positions=positions,
+            ):
+                key = reason.split(":", 1)[0]
+                if key not in hard:
+                    hard.append(key)
+        except Exception as exc:  # noqa: BLE001
+            hard.append(f"account_state_unavailable:{type(exc).__name__}")
+
+        coverage_hard_keys = {
+            "missing_wac",
+            "missing_strike",
+            "missing_underlying",
+            "missing_deliverable_shares",
+            "invalid_quantity",
+            "account_mismatch",
+            "underlying_mismatch",
+            "unsupported_order_type",
+            "unsupported_side_for_covered_call",
+            "nonstandard_deliverable_unsupported",
+            "insufficient_unencumbered_shares",
+            "strike_below_wac",
+        }
+        for reason in validate_intent_coverage(
+            intent, coverage, expected_account_id=expected_account
+        ):
+            key = reason.split(":", 1)[0]
+            if key in HARD_BLOCK_REASONS or key in coverage_hard_keys:
+                mapped = key
+                if "strike_below_wac" in reason:
+                    mapped = "strike_below_wac"
+                elif "insufficient_unencumbered" in reason:
+                    mapped = "insufficient_unencumbered_shares"
+                if mapped not in hard:
+                    hard.append(mapped)
+            else:
+                soft.append(reason)
+
+        _ = client_order_id  # reserved for future reservation-aware classify
         return hard, soft
 
     def _apply_broker_snapshot(self, client_order_id: str, snapshot: Any) -> None:
@@ -375,7 +531,6 @@ class OrderManager:
         else:
             new_state = OrderState.ACKNOWLEDGED
         current = OrderState(row["state"])
-        # Force-progress from ambiguous submit/recon states using broker truth.
         force = current in {
             OrderState.SUBMITTED,
             OrderState.RECONCILIATION_NEEDED,
@@ -389,6 +544,13 @@ class OrderManager:
                 to_state=new_state.value,
                 detail=status,
             )
+        if new_state in {
+            OrderState.FILLED,
+            OrderState.CANCELED,
+            OrderState.REJECTED,
+            OrderState.EXPIRED,
+        }:
+            self._repo.release_reservation(client_order_id, status="consumed")
         filled = snapshot.filled_qty
         fresh = self._repo.get_order(client_order_id)
         assert fresh is not None
