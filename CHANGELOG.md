@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- M5 autonomous scheduler: startup/trading-day/monthly/event jobs, NYSE holiday
+  skip, worker lock, idempotent job_keys, file+SQLite alerts, monthly reports;
+  TRADING_PAUSED pauses trading independently of research/reporting.
 - M4 paper execution: order state machine, client-order-id idempotency, timeout
   lookup-before-retry, approval queue (hard blocks never approvable), kill switch,
   paper verify before submit, CLI trade/approvals. No live trading path.
