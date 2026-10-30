@@ -1,0 +1,18 @@
+# Optional TrueNAS SCALE override — mount host datasets (see docs/TRUENAS_DEPLOYMENT.md).
+# Usage: docker compose -f compose.yaml -f compose.truenas.yaml up -d
+services:
+  agent:
+    volumes:
+      - type: bind
+        source: ${TRUENAS_DATA_PATH:-/mnt/tank/apps/dividend-agent/data}
+        target: /data
+      - type: bind
+        source: ${TRUENAS_REPORTS_PATH:-/mnt/tank/apps/dividend-agent/reports}
+        target: /reports
+      - type: bind
+        source: ${TRUENAS_LOGS_PATH:-/mnt/tank/apps/dividend-agent/logs}
+        target: /logs
+      - type: bind
+        source: ${TRUENAS_CONFIG_PATH:-/mnt/tank/apps/dividend-agent/config/strategy.yaml}
+        target: /config/strategy.yaml
+        read_only: true

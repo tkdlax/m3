@@ -1,0 +1,47 @@
+# Paper-only dry-run deployment (PROJECT_SPEC §16).
+# Copy .env.example -> .env and strategy.example.yaml -> a mounted config before paper_auto.
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dividend-agent:0.1.0
+    container_name: dividend-agent
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Denver}
+      TRADING_PAUSED: ${TRADING_PAUSED:-true}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
+      # Paper credentials only — never put live keys here for v1.
+      ALPACA_PAPER_API_KEY: ${ALPACA_PAPER_API_KEY:-}
+      ALPACA_PAPER_API_SECRET: ${ALPACA_PAPER_API_SECRET:-}
+      ALPACA_PAPER_BASE_URL: ${ALPACA_PAPER_BASE_URL:-https://paper-api.alpaca.markets}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - agent-data:/data
+      - agent-reports:/reports
+      - agent-logs:/logs
+      - ./config/strategy.example.yaml:/config/strategy.yaml:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 1.0
+    # No inbound ports for MVP (approvals via CLI later).
+    healthcheck:
+      test: ["CMD", "dividend-agent", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  agent-data:
+  agent-reports:
+  agent-logs:

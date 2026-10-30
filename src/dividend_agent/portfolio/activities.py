@@ -1,0 +1,1 @@
+"""Broker activity journal stub."""

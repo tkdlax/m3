@@ -1,0 +1,1 @@
+"""Allocation / concentration rules stub."""
