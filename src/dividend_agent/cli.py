@@ -1,4 +1,4 @@
-"""Command-line interface stubs for M0."""
+"""Command-line interface (M0 + M1 broker/ledger)."""
 
 from __future__ import annotations
 
@@ -13,9 +13,11 @@ from rich.table import Table
 
 from dividend_agent import __version__
 from dividend_agent.app import health_payload
+from dividend_agent.brokers.factory import create_broker_adapter
 from dividend_agent.brokers.interface import (
+    BrokerConfigError,
+    BrokerTransportError,
     PaperNotVerifiedError,
-    UnconfiguredBrokerAdapter,
     require_verified_paper,
 )
 from dividend_agent.config import ConfigError, load_config
@@ -24,6 +26,8 @@ from dividend_agent.execution.guardrails import (
     assert_guardrails_resolved_for_auto_submit,
     null_execution_guardrails,
 )
+from dividend_agent.execution.reconciliation import Reconciler
+from dividend_agent.storage import LedgerRepository, open_migrated
 
 app = typer.Typer(
     name="dividend-agent",
@@ -31,12 +35,23 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 config_app = typer.Typer(help="Strategy configuration commands.")
-broker_app = typer.Typer(help="Broker paper-verification commands.")
+broker_app = typer.Typer(help="Broker paper-verification and ledger commands.")
+ledger_app = typer.Typer(help="Local SQLite ledger status.")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
+app.add_typer(ledger_app, name="ledger")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
+
+
+def _resolve_db_path(config: Path | None, db: Path | None) -> Path:
+    if db is not None:
+        return db
+    if config is not None:
+        cfg = load_config(config)
+        return Path(cfg.storage.sqlite_path)
+    return Path("/data/agent.sqlite3")
 
 
 @app.command("version")
@@ -113,8 +128,13 @@ def config_validate(
 
 @broker_app.command("verify-paper")
 def broker_verify_paper() -> None:
-    """Positively verify Alpaca paper account (stub in M0 — fails closed)."""
-    adapter = UnconfiguredBrokerAdapter()
+    """Positively verify Alpaca paper account; fail closed if unverified."""
+    try:
+        adapter = create_broker_adapter()
+    except BrokerConfigError as exc:
+        err_console.print(f"[red]fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
     result = adapter.verify_paper()
     console.print(
         {
@@ -128,9 +148,153 @@ def broker_verify_paper() -> None:
         require_verified_paper(result)
     except PaperNotVerifiedError as exc:
         err_console.print(
-            "[red]fail closed:[/red] paper account not verified; no orders may be submitted."
+            "[red]fail closed:[/red] paper account not verified; "
+            "no orders may be submitted. Provide ALPACA_PAPER_API_KEY / "
+            "ALPACA_PAPER_API_SECRET against paper-api.alpaca.markets."
         )
         raise typer.Exit(code=1) from exc
+    console.print("[green]ok[/green] paper account verified (read-only M1).")
+
+
+@broker_app.command("reconcile")
+def broker_reconcile(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Strategy YAML for sqlite_path."),
+    ] = None,
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="Override SQLite path."),
+    ] = None,
+) -> None:
+    """Pull paper account/positions/orders/activities into SQLite. No trades."""
+    try:
+        db_path = _resolve_db_path(config, db)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    try:
+        adapter = create_broker_adapter()
+    except BrokerConfigError as exc:
+        err_console.print(f"[red]fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    conn = open_migrated(db_path)
+    try:
+        repo = LedgerRepository(conn)
+        reconciler = Reconciler(adapter, repo)
+        result = reconciler.reconcile()
+    except PaperNotVerifiedError as exc:
+        err_console.print(f"[red]fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except BrokerTransportError as exc:
+        err_console.print(f"[red]broker error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+        close = getattr(adapter, "close", None)
+        if callable(close):
+            close()
+
+    console.print(
+        {
+            "account_id": result.account_id,
+            "positions": result.positions,
+            "orders": result.orders,
+            "activities": result.activities,
+            "job_id": result.job_id,
+            "detail": result.detail,
+            "mismatches": result.mismatches,
+            "db": str(db_path),
+        }
+    )
+    if result.mismatches:
+        err_console.print("[yellow]warnings:[/yellow] " + "; ".join(result.mismatches))
+    console.print("[green]ok[/green] reconciliation complete (no orders submitted).")
+
+
+@broker_app.command("status")
+def broker_status(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Strategy YAML for sqlite_path."),
+    ] = None,
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="Override SQLite path."),
+    ] = None,
+) -> None:
+    """Show last verified ledger snapshot from SQLite (no broker call required)."""
+    try:
+        db_path = _resolve_db_path(config, db)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if not db_path.exists():
+        err_console.print(
+            f"[red]no ledger:[/red] {db_path} does not exist. "
+            "Run `broker reconcile` after configuring paper credentials."
+        )
+        raise typer.Exit(code=1)
+
+    conn = open_migrated(db_path)
+    try:
+        repo = LedgerRepository(conn)
+        accounts = repo.list_accounts()
+        if not accounts:
+            err_console.print("[yellow]ledger empty:[/yellow] no accounts synced yet.")
+            raise typer.Exit(code=1)
+        payloads = []
+        for acct in accounts:
+            account_id = acct["account_id"]
+            holdings = repo.list_holdings(account_id)
+            job = repo.latest_job("reconcile")
+            payloads.append(
+                {
+                    "account_id": account_id,
+                    "status": acct["status"],
+                    "cash": acct["cash"],
+                    "equity": acct["equity"],
+                    "buying_power": acct["buying_power"],
+                    "holdings": len(holdings),
+                    "orders": repo.count_orders(account_id),
+                    "activities": repo.count_activities(account_id),
+                    "synced_at": acct["synced_at"],
+                    "last_reconcile": None
+                    if job is None
+                    else {
+                        "id": job.id,
+                        "status": job.status,
+                        "finished_at": job.finished_at,
+                        "detail": job.detail,
+                    },
+                }
+            )
+    finally:
+        conn.close()
+
+    console.print_json(json.dumps(payloads))
+
+
+@ledger_app.command("migrate")
+def ledger_migrate(
+    db: Annotated[
+        Path,
+        typer.Option("--db", help="SQLite path to migrate."),
+    ] = Path("/data/agent.sqlite3"),
+) -> None:
+    """Apply SQLite migrations (WAL) without contacting the broker."""
+    conn = open_migrated(db)
+    try:
+        from dividend_agent.storage.db import current_schema_version
+
+        version = current_schema_version(conn)
+    finally:
+        conn.close()
+    console.print({"db": str(db), "schema_version": version})
+    console.print("[green]ok[/green] migrations applied.")
 
 
 def main() -> None:

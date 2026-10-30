@@ -1,0 +1,14 @@
+{
+  "id": "paper-acct-001",
+  "account_number": "PA123456",
+  "status": "ACTIVE",
+  "currency": "USD",
+  "cash": "25000.50",
+  "buying_power": "50000.00",
+  "equity": "27500.75",
+  "portfolio_value": "27500.75",
+  "pattern_day_trader": false,
+  "trading_blocked": false,
+  "account_blocked": false,
+  "options_approved_level": 2
+}
