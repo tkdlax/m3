@@ -1,0 +1,24 @@
+[
+  {
+    "asset_id": "asset-gis",
+    "symbol": "GIS",
+    "asset_class": "us_equity",
+    "qty": "100",
+    "qty_available": "100",
+    "avg_entry_price": "45.10",
+    "market_value": "4600.00",
+    "cost_basis": "4510.00",
+    "side": "long"
+  },
+  {
+    "asset_id": "asset-t",
+    "symbol": "T",
+    "asset_class": "us_equity",
+    "qty": "50",
+    "qty_available": "50",
+    "avg_entry_price": "16.20",
+    "market_value": "825.00",
+    "cost_basis": "810.00",
+    "side": "long"
+  }
+]

@@ -17,6 +17,10 @@ uv sync --all-extras
 make lint typecheck test
 make config-validate
 ./scripts/smoke_test.sh
+uv run dividend-agent broker verify-paper
+uv run dividend-agent broker reconcile --db ./data/agent.sqlite3
+uv run dividend-agent research screen GIS --trailing-yield 0.06 --price 40 \
+  --week52-high 50 --week52-low 30 --avg-dollar-volume 1e7 --optionable
 docker compose build
 ```
 
