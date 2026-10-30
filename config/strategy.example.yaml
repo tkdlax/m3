@@ -1,0 +1,51 @@
+# Example strategy configuration (PROJECT_SPEC §11).
+# These values are examples, not hidden operator decisions.
+# Null execution guardrails MUST be set explicitly before paper_auto.
+schema_version: 1
+mode: paper_dry_run
+broker:
+  provider: alpaca
+  environment: paper
+  require_positive_paper_verification: true
+strategy:
+  dividend_yield_target_min: 0.05
+  dividend_yield_target_max: 0.07
+  unusually_high_yield_review_at: 0.09
+  require_latest_10k: true
+  require_subsequent_10q_review: true
+  inspect_52_week_range: true
+  allow_partial_share_positions: true
+  covered_calls:
+    target_days_to_expiry: 30
+    min_days_to_expiry: 21
+    max_days_to_expiry: 45
+    chance_of_profit_min: 0.90
+    aggressive_mode_enabled: false
+    aggressive_probability_floor: 0.80
+    strike_floor: weighted_average_acquisition_cost
+    require_out_of_money_at_entry: true
+    contracts_per_standard_lot: 1
+    skip_if_premium_not_worthwhile: true
+    ex_dividend_policy: avoid_overlap
+    early_assignment_review_enabled: true
+execution:
+  auto_paper_orders_enabled: false
+  human_approval_on_exceptions: true
+  hard_blocks_cannot_be_overridden: true
+  require_fresh_quote_seconds: 60
+  require_idempotency_key: true
+  # These MUST be decided before auto trading; null means fail closed.
+  max_position_pct: null
+  max_portfolio_order_notional_usd: null
+  min_cash_reserve_usd: null
+  min_option_bid_usd_per_share: null
+  max_option_bid_ask_spread_pct: null
+  min_option_open_interest: null
+  max_new_stock_order_notional_usd: null
+research:
+  sec_user_agent: ${SEC_USER_AGENT}
+  max_age_days_for_research_memo: 30
+notifications:
+  channel: file
+storage:
+  sqlite_path: /data/agent.sqlite3
