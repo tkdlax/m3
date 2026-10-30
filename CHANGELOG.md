@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- M2 research: SEC EDGAR client (User-Agent, cache, rate limit, citations), company facts,
+  declared/forecast dividend labeling, screener, deterministic memos + `ResearchAgent`,
+  SQLite issuers/filings/memos, CLI `research symbol|screen`. Missing data fails closed.
 - M1 broker + ledger: Alpaca paper REST adapter (`verify_paper`, account, positions, orders,
   activities), SQLite WAL migrations/repository, reconciliation into local journal, CLI
   (`broker verify-paper|reconcile|status`, `ledger migrate`). No order submission.

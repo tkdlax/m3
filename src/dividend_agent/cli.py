@@ -27,7 +27,10 @@ from dividend_agent.execution.guardrails import (
     null_execution_guardrails,
 )
 from dividend_agent.execution.reconciliation import Reconciler
-from dividend_agent.storage import LedgerRepository, open_migrated
+from dividend_agent.research.pipeline import ResearchPipeline
+from dividend_agent.research.screener import MarketSnapshotInput
+from dividend_agent.research.sec_edgar import SecEdgarError
+from dividend_agent.storage import LedgerRepository, ResearchRepository, open_migrated
 
 app = typer.Typer(
     name="dividend-agent",
@@ -37,9 +40,11 @@ app = typer.Typer(
 config_app = typer.Typer(help="Strategy configuration commands.")
 broker_app = typer.Typer(help="Broker paper-verification and ledger commands.")
 ledger_app = typer.Typer(help="Local SQLite ledger status.")
+research_app = typer.Typer(help="SEC research and issuer screening (read-only).")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
 app.add_typer(ledger_app, name="ledger")
+app.add_typer(research_app, name="research")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -295,6 +300,142 @@ def ledger_migrate(
         conn.close()
     console.print({"db": str(db), "schema_version": version})
     console.print("[green]ok[/green] migrations applied.")
+
+
+def _parse_market_opts(
+    price: float | None,
+    week52_high: float | None,
+    week52_low: float | None,
+    avg_dollar_volume: float | None,
+    optionable: bool | None,
+) -> MarketSnapshotInput:
+    from datetime import date
+    from decimal import Decimal
+
+    return MarketSnapshotInput(
+        price=None if price is None else Decimal(str(price)),
+        price_as_of=date.today() if price is not None else None,
+        week52_high=None if week52_high is None else Decimal(str(week52_high)),
+        week52_low=None if week52_low is None else Decimal(str(week52_low)),
+        avg_dollar_volume=(None if avg_dollar_volume is None else Decimal(str(avg_dollar_volume))),
+        optionable=optionable,
+    )
+
+
+@research_app.command("symbol")
+def research_symbol_cmd(
+    ticker: Annotated[str, typer.Argument(help="Ticker symbol to research.")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Strategy YAML."),
+    ] = Path("config/strategy.example.yaml"),
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite path to persist memo (optional)."),
+    ] = None,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="SEC JSON cache directory."),
+    ] = Path(".cache/sec"),
+    price: Annotated[float | None, typer.Option(help="Market price (required for yields).")] = None,
+    week52_high: Annotated[float | None, typer.Option(help="52-week high.")] = None,
+    week52_low: Annotated[float | None, typer.Option(help="52-week low.")] = None,
+    avg_dollar_volume: Annotated[float | None, typer.Option(help="Average dollar volume.")] = None,
+    optionable: Annotated[bool | None, typer.Option(help="Optionable flag.")] = None,
+) -> None:
+    """Build a cited issuer research memo from SEC EDGAR (no orders)."""
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    market = _parse_market_opts(price, week52_high, week52_low, avg_dollar_volume, optionable)
+    pipeline: ResearchPipeline | None = None
+    try:
+        pipeline = ResearchPipeline.from_config(cfg, cache_dir=cache_dir)
+        memo = pipeline.research_symbol(ticker, market=market)
+    except SecEdgarError as exc:
+        err_console.print(f"[red]research fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        if pipeline is not None:
+            pipeline.sec.close()
+
+    payload = {
+        "ticker": memo.identity.ticker,
+        "cik": memo.identity.cik,
+        "decision": memo.decision,
+        "decision_reasons": list(memo.decision_reasons),
+        "unknowns": list(memo.unknowns),
+        "thesis": memo.thesis,
+        "criteria": [c.model_dump(mode="json") for c in memo.criteria],
+        "citations": [c.model_dump(mode="json") for c in memo.citations[:20]],
+        "filings": [c.model_dump(mode="json") for c in memo.filings[:10]],
+        "memo_id": str(memo.memo_id),
+    }
+    console.print_json(json.dumps(payload))
+
+    if db is not None:
+        conn = open_migrated(db)
+        try:
+            ResearchRepository(conn).save_memo(memo)
+        finally:
+            conn.close()
+        console.print(f"[green]ok[/green] memo persisted to {db}")
+
+    if memo.decision == "reject":
+        raise typer.Exit(code=1)
+
+
+@research_app.command("screen")
+def research_screen_cmd(
+    ticker: Annotated[str, typer.Argument(help="Ticker to screen.")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Strategy YAML."),
+    ] = Path("config/strategy.example.yaml"),
+    price: Annotated[float | None, typer.Option(help="Market price.")] = None,
+    week52_high: Annotated[float | None, typer.Option()] = None,
+    week52_low: Annotated[float | None, typer.Option()] = None,
+    avg_dollar_volume: Annotated[float | None, typer.Option()] = None,
+    optionable: Annotated[bool | None, typer.Option()] = None,
+    trailing_yield: Annotated[
+        float | None,
+        typer.Option(help="Override trailing yield (e.g. 0.06) when SEC dividends unavailable."),
+    ] = None,
+) -> None:
+    """Run deterministic screen gates; missing data fails closed / review."""
+    from decimal import Decimal
+
+    from dividend_agent.research.dividends import (
+        DividendLabel,
+        DividendSnapshot,
+    )
+    from dividend_agent.research.screener import screen_issuer
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    market = _parse_market_opts(price, week52_high, week52_low, avg_dollar_volume, optionable)
+    unknowns: list[str] = []
+    trailing = None if trailing_yield is None else Decimal(str(trailing_yield))
+    if trailing is None:
+        unknowns.append("trailing_yield_not_provided")
+    div = DividendSnapshot(
+        ticker=ticker.upper(),
+        trailing_yield=trailing,
+        trailing_yield_label=DividendLabel.TRAILING,
+        price_for_yield=market.price,
+        unknowns=tuple(unknowns),
+    )
+    result = screen_issuer(ticker, strategy=cfg.strategy, dividends=div, market=market)
+    console.print_json(json.dumps(result.model_dump(mode="json")))
+    if not result.accepted:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:
