@@ -21,7 +21,7 @@ Implemented in `options.gates` / `strategy.candidate_selection` (evaluate only �
 | Premium | Missing bid rejects |
 | Liquidity (§21) | `min_option_bid`, `max_spread`, `min_oi` **null ⇒ reject** (no invented defaults) |
 | Ex-dividend | `avoid_overlap`: missing calendar or overlap ⇒ reject |
-| Chance of Profit | Default floor 0.90; 0.80–0.90 band is **review** unless `aggressive_mode_enabled` |
+| Chance of Profit (COP) | Default floor **0.90** on \(P(S_T < K+p)\) — **not** P(OTM), **not** combined P&L; 0.80–&lt;0.90 band is **review** unless `aggressive_mode_enabled` (still not a hard-block bypass) |
 
 ## Approval-required exceptions
 

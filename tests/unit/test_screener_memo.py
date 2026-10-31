@@ -115,9 +115,18 @@ def test_memo_with_known_accession_and_qualification() -> None:
         screen=screen,
         max_age_days=3650,
     )
-    decision, extra = qualify_memo(memo, cfg.strategy)
+    # Filing links alone are insufficient (Milestone C); supply narrative evidence.
+    from dividend_agent.research.narrative import analyze_filing_narrative
+
+    narrative_text = (
+        "Item 1. Business. Branded consumer foods. " + ("x" * 220) + " Item 1A. Risk Factors. "
+        "Competition and costs. " + ("y" * 220)
+    )
+    narrative = analyze_filing_narrative(narrative_text, citation=filings[0])
+    decision, extra = qualify_memo(memo, cfg.strategy, require_narrative=True, narrative=narrative)
     assert decision in {"accept", "review"}
     assert any(c.name == "require_latest_10k" for c in extra)
+    assert any(c.name == "filing_narrative" and c.status == "pass" for c in extra)
     assert validate_memo_citations(memo) == []
 
 

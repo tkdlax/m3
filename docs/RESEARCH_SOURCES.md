@@ -10,15 +10,19 @@
 Requirements:
 
 - Descriptive **User-Agent** with contact (`research.sec_user_agent` / `SEC_USER_AGENT`).
-- Client-side **caching** (`--cache-dir`) and polite **rate limiting**.
+- Client-side **caching** with TTL (`research.sec_cache_ttl_seconds`, default 86400) and polite **rate limiting**. Stale cache entries are refetched; a new memo timestamp must not make old companyfacts appear fresh.
 - Citations include company/CIK, accession, form, filing date, report period, URL, and fact name when applicable.
+- **Filing narrative:** retrieve/analyze latest 10-K (and subsequent 10-Q when present). A filing **link alone does not qualify** — substantive business+risk evidence from the document body is required when `require_filing_narrative` is true.
+- **Period normalization:** distinguish instant / quarterly / YTD / annual / trailing; handle amended duplicates; compose **total debt** from compatible components (same period end + kind), not tag-alternative races.
 - **Never fabricate** missing filings or facts — missing data fails closed or flags review.
 
 ## Dividends
 
 - Declared per-share amounts may be taken from company facts tags when present (`CommonStockDividendsPerShareDeclared`), labeled **`declared`**.
-- Trailing yield uses summed declared events and is labeled **`trailing`**.
+- Events are normalized by period/amount with overlap dedupe; **specials** (outlier amounts) are labeled and excluded from TTM.
+- Trailing yield sums up to four **distinct quarterly** periods when proven; annual/unknown frequency does not pretend last-N is TTM. Labeled **`trailing`**.
 - Annualized-from-latest-declared yield is labeled **`forecast`** (not company guidance) and recorded as an unknown/caveat.
+- **XBRL period end is not an ex-dividend or payment date** — never invent those from companyfacts ends.
 - Ex-dividend calendars, optionability, and live prices are **not** supplied by SEC alone — Milestone B pulls them via read-only `MarketDataAdapter` (Alpaca data REST / corporate actions). Fixture CLI flags remain for replay only.
 
 ## Market inputs
@@ -27,7 +31,7 @@ Price, 52-week range, liquidity, and optionability must come from authorized mar
 
 ## AI research provider
 
-`ResearchAgent` is provider-neutral (`DeterministicResearchAgent` default; `LlmResearchAgentStub` optional). Agents receive structured data and untrusted excerpts only — **no order-submission credentials or tools**. LLM output (when enabled later) must be typed claims with citations and independently validated.
+`ResearchAgent` is provider-neutral (`DeterministicResearchAgent` default; `LlmResearchAgentStub` optional). Structured request/response schema lives in `agents.schema` (`StructuredResearchRequest` / `StructuredResearchResponse`) with timeout/token budgets and citation validation. Agents receive structured data and untrusted excerpts only — **no order-submission credentials or tools**. Real providers are optional behind the interface; the stub validates schema without inventing claims.
 
 ## CLI
 

@@ -121,6 +121,10 @@ class ResearchConfig(BaseModel):
 
     sec_user_agent: str = ""
     max_age_days_for_research_memo: int = Field(default=30, ge=1)
+    sec_cache_ttl_seconds: int = Field(default=86400, ge=0)
+    require_filing_narrative: bool = True
+    ai_research_timeout_seconds: float = Field(default=60.0, gt=0)
+    ai_research_max_tokens: int = Field(default=4000, ge=1)
 
 
 class NotificationsConfig(BaseModel):

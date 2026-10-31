@@ -18,11 +18,19 @@ from decimal import Decimal
 from dividend_agent.brokers.types import AccountSnapshot, PositionSnapshot
 from dividend_agent.config import AppConfig
 from dividend_agent.domain.models import TradeIntent
-from dividend_agent.execution.coverage import underlying_from_intent
+from dividend_agent.options.gates import CandidateEvaluation
+from dividend_agent.portfolio.lots import CoverageState, contracts_coverable
+
+
+def _underlying_from_intent(intent: TradeIntent) -> str | None:
+    # Local import avoids allocation ↔ execution.guardrails cycle via package __init__.
+    from dividend_agent.execution.coverage import underlying_from_intent
+
+    return underlying_from_intent(intent)
 
 
 def _is_option_intent(intent: TradeIntent) -> bool:
-    underlying = underlying_from_intent(intent)
+    underlying = _underlying_from_intent(intent)
     if underlying is None:
         return False
     return intent.symbol.upper() != underlying.upper() or intent.strike is not None
@@ -73,7 +81,7 @@ def evaluate_allocation_limits(
     """
     reasons: list[str] = []
     exec_cfg = config.execution
-    underlying = underlying_from_intent(intent)
+    underlying = _underlying_from_intent(intent)
     is_option = _is_option_intent(intent)
 
     if account.trading_blocked or account.account_blocked:
@@ -130,3 +138,64 @@ def evaluate_allocation_limits(
     # Portfolio-level max order notional for options already applied.
 
     return reasons
+
+
+# --- Milestone C: rank + allocate covered calls without overcommitting shares ---
+
+
+def rank_covered_call_candidates(
+    evaluations: list[CandidateEvaluation] | tuple[CandidateEvaluation, ...],
+) -> list[CandidateEvaluation]:
+    """Rank accepted candidates: higher COP, then higher premium, then farther OTM."""
+    accepted = [e for e in evaluations if e.accepted]
+
+    def key(e: CandidateEvaluation) -> tuple[Decimal, Decimal, Decimal]:
+        cop = e.probability.chance_of_profit if e.probability is not None else Decimal("0")
+        prem = e.premium_per_share or Decimal("0")
+        # Farther OTM preferred when COP/premium tie — use strike as proxy with spot in extras
+        strike = e.strike
+        return (cop, prem, strike)
+
+    return sorted(accepted, key=key, reverse=True)
+
+
+def allocate_covered_calls(
+    *,
+    coverage: CoverageState,
+    evaluations: list[CandidateEvaluation] | tuple[CandidateEvaluation, ...],
+    contracts_per_lot: int = 1,
+    deliverable: int = 100,
+) -> tuple[list[CandidateEvaluation], list[CandidateEvaluation], list[str]]:
+    """Select executable calls without overcommitting unencumbered shares.
+
+    Returns ``(executable, alternatives, notes)``. Alternatives are accepted
+    candidates that were not allocated due to coverage limits.
+    """
+    ranked = rank_covered_call_candidates(evaluations)
+    remaining = coverage.unencumbered_shares
+    executable: list[CandidateEvaluation] = []
+    alternatives: list[CandidateEvaluation] = []
+    notes: list[str] = []
+    needed_per = Decimal(deliverable) * Decimal(contracts_per_lot)
+    max_contracts = contracts_coverable(remaining, deliverable=deliverable)
+    if max_contracts <= 0:
+        notes.append("no_unencumbered_shares_for_allocation")
+        return [], ranked, notes
+
+    slots = max_contracts // max(1, contracts_per_lot)
+    for candidate in ranked:
+        if slots <= 0:
+            alternatives.append(candidate)
+            continue
+        if remaining < needed_per:
+            alternatives.append(candidate)
+            continue
+        executable.append(candidate)
+        remaining -= needed_per
+        slots -= 1
+
+    if alternatives:
+        notes.append(
+            f"coverage_capped_executable={len(executable)}_alternatives={len(alternatives)}"
+        )
+    return executable, alternatives, notes
