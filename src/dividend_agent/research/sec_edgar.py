@@ -36,6 +36,7 @@ class SecEdgarClient:
         client: httpx.Client | None = None,
         min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
         timeout: float = 30.0,
+        cache_ttl_seconds: int = 86400,
     ) -> None:
         if not user_agent or not user_agent.strip():
             raise SecEdgarError(
@@ -45,6 +46,7 @@ class SecEdgarClient:
         self._cache_dir = Path(cache_dir) if cache_dir else None
         if self._cache_dir is not None:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache_ttl_seconds = max(0, cache_ttl_seconds)
         self._min_interval = max(0.0, min_interval_seconds)
         self._last_request_at = 0.0
         self._owns_client = client is None
@@ -52,7 +54,7 @@ class SecEdgarClient:
             headers={
                 "User-Agent": self._user_agent,
                 "Accept-Encoding": "gzip, deflate",
-                "Accept": "application/json",
+                "Accept": "application/json, text/html, text/plain, */*",
             },
             timeout=timeout,
             follow_redirects=True,
@@ -79,9 +81,15 @@ class SecEdgarClient:
         safe = key.replace("/", "_").replace(":", "_")
         return self._cache_dir / f"{safe}.json"
 
+    def _cache_fresh(self, path: Path) -> bool:
+        if self._cache_ttl_seconds <= 0:
+            return False
+        age = time.time() - path.stat().st_mtime
+        return age <= self._cache_ttl_seconds
+
     def _get_json(self, url: str, *, cache_key: str | None = None) -> Any:
         path = self._cache_path(cache_key) if cache_key else None
-        if path is not None and path.is_file():
+        if path is not None and path.is_file() and self._cache_fresh(path):
             return json.loads(path.read_text(encoding="utf-8"))
 
         self._throttle()
@@ -107,6 +115,36 @@ class SecEdgarClient:
         if path is not None:
             path.write_text(json.dumps(payload), encoding="utf-8")
         return payload
+
+    def fetch_filing_document(self, citation: Citation, *, max_chars: int = 500_000) -> str:
+        """Retrieve primary filing document text for narrative analysis.
+
+        Fail closed with empty string only when URL missing; HTTP errors raise.
+        """
+        if not citation.url:
+            raise SecEdgarError("filing citation missing url — cannot retrieve narrative")
+        # Prefer primary document URL; directory URLs are insufficient for narrative.
+        url = citation.url
+        if url.endswith("/"):
+            raise SecEdgarError(f"filing url is archive directory without primary document: {url}")
+        cache_key = f"filing_doc_{citation.accession or 'unknown'}"
+        path = self._cache_path(cache_key)
+        if path is not None and path.is_file() and self._cache_fresh(path):
+            return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+
+        self._throttle()
+        try:
+            response = self._client.get(url)
+        except httpx.HTTPError as exc:
+            raise SecEdgarError(f"SEC filing document request failed: {exc}") from exc
+        finally:
+            self._last_request_at = time.monotonic()
+        if response.status_code >= 400:
+            raise SecEdgarError(f"SEC filing document HTTP {response.status_code} for {url}")
+        text = response.text[:max_chars]
+        if path is not None:
+            path.write_text(text, encoding="utf-8")
+        return text
 
     def load_ticker_map(self) -> dict[str, str]:
         """Return uppercase ticker -> zero-padded 10-digit CIK."""
