@@ -19,7 +19,7 @@ Requirements:
 - Declared per-share amounts may be taken from company facts tags when present (`CommonStockDividendsPerShareDeclared`), labeled **`declared`**.
 - Trailing yield uses summed declared events and is labeled **`trailing`**.
 - Annualized-from-latest-declared yield is labeled **`forecast`** (not company guidance) and recorded as an unknown/caveat.
-- Ex-dividend calendars, optionability, and live prices are **not** supplied by SEC alone — pass market inputs from broker/licensed feeds (CLI flags / future adapters).
+- Ex-dividend calendars, optionability, and live prices are **not** supplied by SEC alone — Milestone B pulls them via read-only `MarketDataAdapter` (Alpaca data REST / corporate actions). Fixture CLI flags remain for replay only.
 
 ## Market inputs
 
