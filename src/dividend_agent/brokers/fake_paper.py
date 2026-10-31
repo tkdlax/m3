@@ -52,6 +52,7 @@ class FakePaperBroker(BrokerAdapter):
         self._positions = list(positions or [])
         self._options_approved_level = options_approved_level
         self._fail_lookup = fail_lookup
+        self._activities: list[ActivitySnapshot] = []
 
     def set_positions(self, positions: list[PositionSnapshot]) -> None:
         self._positions = list(positions)
@@ -93,13 +94,20 @@ class FakePaperBroker(BrokerAdapter):
             orders = [o for o in orders if (o.status or "").lower() in open_statuses]
         return orders[:limit]
 
+    def set_activities(self, activities: list[ActivitySnapshot]) -> None:
+        self._activities = list(activities)
+
     def list_activities(
         self,
         *,
         activity_types: tuple[str, ...] | None = None,
         page_size: int = 100,
     ) -> list[ActivitySnapshot]:
-        return []
+        items = list(self._activities)
+        if activity_types:
+            wanted = {t.upper() for t in activity_types}
+            items = [a for a in items if (a.activity_type or "").upper() in wanted]
+        return items[:page_size]
 
     def submit_paper_order(self, request: PaperOrderRequest) -> OrderSnapshot:
         # Idempotent: same client_order_id returns existing order (no duplicate).

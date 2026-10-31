@@ -81,8 +81,25 @@ def health_cmd(
         Path | None,
         typer.Option("--config", "-c", help="Optional strategy YAML for mode context."),
     ] = None,
+    readiness: Annotated[
+        bool,
+        typer.Option(
+            "--readiness",
+            help="Operational readiness (DB/jobs/cycles). Exit 1 if not_ready.",
+        ),
+    ] = False,
+    check_broker: Annotated[
+        bool,
+        typer.Option("--check-broker", help="With --readiness, also verify paper broker."),
+    ] = False,
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite path for readiness checks."),
+    ] = None,
 ) -> None:
-    """Report process health (safe; does not contact brokers)."""
+    """Report process liveness (default) or operational readiness (--readiness)."""
+    from dividend_agent.app import readiness_payload
+
     loaded = None
     if config is not None:
         try:
@@ -90,7 +107,20 @@ def health_cmd(
         except ConfigError as exc:
             err_console.print(f"[red]config error:[/red] {exc}")
             raise typer.Exit(code=2) from exc
-    console.print_json(json.dumps(health_payload(loaded)))
+    if not readiness:
+        console.print_json(json.dumps(health_payload(loaded)))
+        return
+    db_path = db
+    if db_path is None and loaded is not None:
+        db_path = Path(loaded.storage.sqlite_path)
+    report = readiness_payload(
+        config=loaded,
+        db_path=db_path,
+        check_broker=check_broker,
+    )
+    console.print_json(json.dumps(report))
+    if report.get("status") == "not_ready":
+        raise typer.Exit(code=1)
 
 
 @config_app.command("validate")

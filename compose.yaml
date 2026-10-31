@@ -23,7 +23,8 @@ services:
       REPORTS_DIR: /reports
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
       SCHEDULER_INTERVAL_SEC: ${SCHEDULER_INTERVAL_SEC:-3600}
-      SCHEDULER_JOBS: ${SCHEDULER_JOBS:-startup,trading_day}
+      # monthly included for autonomous dry-run cycle (paper_auto still gated).
+      SCHEDULER_JOBS: ${SCHEDULER_JOBS:-startup,trading_day,monthly}
       # Set true only after paper credentials are configured and verified.
       REQUIRE_PAPER_ON_START: ${REQUIRE_PAPER_ON_START:-false}
     env_file:
