@@ -778,6 +778,13 @@ def scheduler_run_cmd(
         Path | None,
         typer.Option("--chain", help="Optional option-chain JSON for monthly evaluate."),
     ] = None,
+    research_symbols: Annotated[
+        str,
+        typer.Option(
+            "--research-symbols",
+            help="Comma-separated tickers for monthly supervised research/cycle.",
+        ),
+    ] = "",
 ) -> None:
     """Run scheduler jobs once under the worker lock (paper verify inside jobs)."""
     from dividend_agent.brokers.factory import create_broker_adapter
@@ -802,6 +809,7 @@ def scheduler_run_cmd(
         period_keys["event_review"] = event
         if "event_review" not in names:
             names.append("event_review")
+    symbols = tuple(s.strip().upper() for s in research_symbols.split(",") if s.strip())
     try:
         cycle = run_jobs(
             config=cfg,
@@ -812,11 +820,74 @@ def scheduler_run_cmd(
             force=force,
             period_keys=period_keys or None,
             option_chain_path=chain,
+            research_symbols=symbols,
         )
     except Exception as exc:  # noqa: BLE001
         err_console.print(f"[red]scheduler failed:[/red] {exc}")
         raise typer.Exit(code=1) from exc
     console.print_json(format_cycle_json(cycle))
+
+
+@scheduler_app.command("cycle")
+def scheduler_cycle_cmd(
+    symbol: Annotated[str, typer.Argument(help="Underlying ticker for supervised cycle.")],
+    config: Annotated[Path, typer.Option("--config", "-c")] = Path("config/strategy.example.yaml"),
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+    chain: Annotated[
+        Path | None,
+        typer.Option("--chain", help="Option-chain JSON fixture for call selection."),
+    ] = None,
+    cycle_id: Annotated[
+        str | None,
+        typer.Option("--cycle-id", help="Resume an existing cycle id."),
+    ] = None,
+    stock_limit: Annotated[
+        str | None,
+        typer.Option("--stock-limit", help="Limit price for accumulation buy."),
+    ] = None,
+) -> None:
+    """Run or resume a supervised paper cycle (research→buy→fill→call→reconcile).
+
+    Defaults remain paper_dry_run / paused — proposes through the gateway without
+    inventing fills. Resume after a broker fill with the same ``--cycle-id``.
+    """
+    from decimal import Decimal
+
+    from dividend_agent.brokers.factory import create_broker_adapter
+    from dividend_agent.orchestration.paper_cycle import run_supervised_cycle
+    from dividend_agent.research.pipeline import ResearchPipeline
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        err_console.print(f"[red]config error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    try:
+        adapter = create_broker_adapter()
+    except BrokerConfigError as exc:
+        err_console.print(f"[red]fail closed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    conn = open_migrated(db)
+    try:
+        pipeline = ResearchPipeline.from_config(cfg)
+        outcome = run_supervised_cycle(
+            config=cfg,
+            broker=adapter,
+            conn=conn,
+            symbol=symbol,
+            research_pipeline=pipeline,
+            option_chain_path=chain,
+            stock_limit_price=Decimal(stock_limit) if stock_limit else None,
+            cycle_id=cycle_id,
+            resume=bool(cycle_id),
+        )
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]cycle failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+    console.print_json(json.dumps(outcome.to_dict()))
 
 
 @scheduler_app.command("status")

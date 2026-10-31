@@ -46,12 +46,18 @@ Idempotent jobs under a single SQLite worker lock. Period keys prevent duplicate
 |---|---|---|
 | `startup` | Each boot / daily | Verify paper, schema, secrets presence, clock, capabilities; reconcile; expire stale approvals |
 | `trading_day` | Exchange trading days | Reconcile, open orders, assignment/expiry + dividend alerts, drift; skip holidays; `skipped_paused` when kill switch on |
-| `monthly` | Calendar month | Research refresh hook, 100-share lot scan, optional chain evaluate, partial accumulation notes, monthly JSON report |
+| `monthly` | Calendar month | Invokes research for `--research-symbols`, starts supervised cycles, evaluates 100-share lots, routes selected calls through the gateway (submit still gated by mode/pause), monthly JSON report |
 | `event_review` | On demand | Focused review for fills / corp actions / outages / mismatches |
+| `trading_day` (D) | Exchange days | Also advances open supervised cycles (fill confirmation → call → reconcile) |
+
+Supervised cycle stages: **research → stock buy → confirmed fill → covered call → reconcile**. Calls are never written against unfilled stock buys. Defaults remain `paper_dry_run` + `TRADING_PAUSED=true` (propose/READY only). Enable monthly explicitly:
 
 ```bash
-dividend-agent scheduler run --jobs startup,trading_day \
+dividend-agent scheduler run --jobs startup,trading_day,monthly \
+  --research-symbols GIS \
   --config /config/strategy.yaml --db /data/agent.sqlite3 --reports /reports
+dividend-agent scheduler cycle GIS --chain /path/to/chain.json --stock-limit 40 \
+  --db /data/agent.sqlite3 --config /config/strategy.yaml
 dividend-agent scheduler status --db /data/agent.sqlite3
 ```
 
