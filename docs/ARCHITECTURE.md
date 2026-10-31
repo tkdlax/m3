@@ -6,6 +6,7 @@ Modular Python application (`src/dividend_agent/`) with:
 
 - **Config** — validated YAML; default `paper_dry_run`
 - **Brokers** — paper-only adapters; M1 REST (`AlpacaPaperAdapter`) with MCP preferred later; fail closed without positive paper verification
+- **Market data** — read-only `MarketDataAdapter` (Milestone B REST on `data.alpaca.markets`; ADR 0004); live chains/calendar for unattended cycles; fixtures replay-only
 - **Research** — SEC EDGAR + company facts + dividend labels + screener + cited memos (M2)
 - **Options / strategy** — chains, probability, WAC/coverage/ex-div gates, TradeIntent selection (M3)
 - **Execution** — reconciliation (M1); intent validation (M3); idempotent paper orders, approvals, kill switch (M4); Milestone A gateway: independent coverage/WAC derivation, atomic share reservations, numeric §21 limit enforcement, decision-stable client order IDs, no submit on lookup ambiguity

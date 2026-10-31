@@ -9,6 +9,8 @@ from typing import Any
 
 from dividend_agent.brokers.interface import BrokerAdapter
 from dividend_agent.config import AppConfig
+from dividend_agent.market_data.factory import create_market_data_adapter
+from dividend_agent.market_data.interface import MarketDataAdapter
 from dividend_agent.scheduling.jobs import JobDeps, default_period_for, register_default_jobs
 from dividend_agent.scheduling.locks import SchedulerLock
 from dividend_agent.scheduling.runner import JobResult, SchedulerRunner
@@ -47,9 +49,11 @@ def run_jobs(
     period_keys: dict[str, str] | None = None,
     research_symbols: tuple[str, ...] = (),
     option_chain_path: Path | None = None,
+    market_data: MarketDataAdapter | None = None,
 ) -> CycleResult:
     conn = open_migrated(db_path)
     results: list[JobResult] = []
+    md = market_data if market_data is not None else create_market_data_adapter(environ=environ)
     try:
         with SchedulerLock(conn) as lock:
             runner = SchedulerRunner(conn)
@@ -60,6 +64,7 @@ def run_jobs(
                 environ=environ,
                 research_symbols=research_symbols,
                 option_chain_path=option_chain_path,
+                market_data=md,
             )
             register_default_jobs(runner, deps)
             for name in job_names:

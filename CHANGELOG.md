@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Milestone B market data: read-only Alpaca REST quotes/option chains/corporate-action
+  dividend calendar with freshness checks; production path no longer requires chain
+  JSON fixtures; ADR 0004 documents REST-before-MCP for market data.
 - Milestone A gateway enforcement: independent coverage/WAC before submit/approve/retry,
   atomic share reservations, numeric §21 limit checks, exact paper URL validation,
   fail-closed `TRADING_PAUSED`, atomic scheduler lease acquire/renew, decision-stable

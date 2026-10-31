@@ -14,6 +14,7 @@ from dividend_agent.config import AppConfig
 from dividend_agent.domain.models import OperatingMode
 from dividend_agent.execution.kill_switch import is_trading_paused
 from dividend_agent.execution.reconciliation import Reconciler
+from dividend_agent.market_data.interface import MarketDataAdapter, MarketDataError
 from dividend_agent.reporting.alerts import AlertSink
 from dividend_agent.reporting.monthly import build_monthly_report, write_monthly_report
 from dividend_agent.scheduling.calendar import (
@@ -34,7 +35,9 @@ class JobDeps:
     environ: dict[str, str] | None = None
     # Optional: symbols for monthly research refresh (offline-safe empty default)
     research_symbols: tuple[str, ...] = ()
+    # Replay/testing only — production uses market_data live chains.
     option_chain_path: Path | None = None
+    market_data: MarketDataAdapter | None = None
 
 
 def register_default_jobs(runner: SchedulerRunner, deps: JobDeps) -> None:
@@ -95,6 +98,28 @@ def job_startup(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> JobR
 
     expired = ApprovalQueue(ExecutionRepository(runner.conn)).expire_stale()
     checks["approvals_expired"] = expired
+
+    # Market-data capability discovery (read-only). Missing caps are recorded;
+    # monthly live evaluation fails closed separately when caps are absent.
+    if deps.market_data is not None:
+        try:
+            md_caps = list(deps.market_data.discover_capabilities())
+            checks["market_data_capabilities"] = md_caps
+            checks["market_data_ready"] = bool(md_caps)
+        except MarketDataError as exc:
+            checks["market_data_capabilities"] = []
+            checks["market_data_ready"] = False
+            checks["market_data_error"] = str(exc)
+            alerts.emit(
+                "market_data_unavailable",
+                "Startup market-data discovery failed",
+                body=str(exc),
+                severity="warning",
+                payload=checks,
+            )
+    else:
+        checks["market_data_capabilities"] = []
+        checks["market_data_ready"] = False
 
     return JobResult(
         job_name="startup",
@@ -275,10 +300,32 @@ def job_monthly(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> JobR
         "trading_paused": paused,
         "mode": deps.config.mode.value,
     }
-    if deps.option_chain_path and deps.option_chain_path.exists() and lots_100:
+    if lots_100 and deps.option_chain_path and deps.option_chain_path.exists():
+        # Explicit fixture/replay path (tests / offline).
         call_selection.update(_evaluate_chain_for_lots(deps, lots_100, paused=paused))
+        call_selection["chain_mode"] = "fixture_replay"
+    elif lots_100 and deps.market_data is not None:
+        try:
+            call_selection.update(_evaluate_live_market_data(deps, lots_100, paused=paused))
+            call_selection["chain_mode"] = "live_market_data"
+        except (MarketDataError, PaperNotVerifiedError) as exc:
+            call_selection["skipped"].append(f"market_data_unavailable:{exc}")
+            call_selection["chain_mode"] = "failed_closed"
+            alerts.emit(
+                "market_data_unavailable",
+                "Monthly call selection skipped — market data unavailable",
+                body=str(exc),
+                severity="error",
+                payload={"error": str(exc)},
+            )
+    elif lots_100:
+        call_selection["skipped"].append(
+            "market_data_unconfigured — no live chain; fixture path not provided"
+        )
+        call_selection["chain_mode"] = "unconfigured"
     else:
-        call_selection["skipped"].append("no_option_chain_path_or_no_lots — research/report only")
+        call_selection["skipped"].append("no_100_share_lots — research/report only")
+        call_selection["chain_mode"] = "no_lots"
 
     report = build_monthly_report(runner.conn, account_id=recon.account_id, period_key=period_key)
     report.skipped_opportunities = list(call_selection.get("skipped") or [])
@@ -374,6 +421,7 @@ def job_event_review(runner: SchedulerRunner, period_key: str, deps: JobDeps) ->
 def _evaluate_chain_for_lots(
     deps: JobDeps, lots_100: list[dict[str, Any]], *, paused: bool
 ) -> dict[str, Any]:
+    """Fixture/replay evaluation — anchors time to chain as_of (not production)."""
     from datetime import UTC, datetime, time
     from datetime import date as date_cls
 
@@ -411,7 +459,56 @@ def _evaluate_chain_for_lots(
         "skipped": list(result.skipped),
         "trading_paused": paused,
         "mode": cfg.mode.value,
-        "note": "intents proposed only; submission gated by mode/pause/guardrails",
+        "note": "fixture replay; intents proposed only; submission gated",
+        "fixture_used": True,
+    }
+
+
+def _evaluate_live_market_data(
+    deps: JobDeps, lots_100: list[dict[str, Any]], *, paused: bool
+) -> dict[str, Any]:
+    """Production path: live quotes/chains/calendar; wall-clock; no fixture JSON."""
+    from decimal import Decimal as Dec
+
+    from dividend_agent.market_data.service import evaluate_underlying_live
+    from dividend_agent.portfolio.lots import CoverageState, ShareLot
+
+    assert deps.market_data is not None
+    cfg = deps.config
+    total_intents = 0
+    skipped: list[str] = []
+    metas: list[dict[str, Any]] = []
+    for lot in lots_100:
+        coverage = CoverageState(
+            symbol=str(lot["symbol"]),
+            lots=(
+                ShareLot(
+                    qty=Dec(str(lot["qty"])),
+                    cost_per_share=Dec(str(lot["avg_entry"])),
+                ),
+            ),
+        )
+        try:
+            result, meta = evaluate_underlying_live(
+                config=cfg,
+                market_data=deps.market_data,
+                coverage=coverage,
+                account_id="scheduler",
+            )
+            total_intents += len(result.intents)
+            skipped.extend(list(result.skipped))
+            metas.append(meta)
+        except MarketDataError as exc:
+            skipped.append(f"{lot['symbol']}:market_data:{exc}")
+    return {
+        "evaluated_lots": len(lots_100),
+        "intents": total_intents,
+        "skipped": skipped,
+        "trading_paused": paused,
+        "mode": cfg.mode.value,
+        "note": "live market data; intents proposed only; submission gated",
+        "fixture_used": False,
+        "underlyings": metas,
     }
 
 
