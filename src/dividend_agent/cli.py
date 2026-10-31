@@ -88,16 +88,23 @@ def health_cmd(
             help="Operational readiness (DB/jobs/cycles). Exit 1 if not_ready.",
         ),
     ] = False,
+    liveness: Annotated[
+        bool,
+        typer.Option(
+            "--liveness",
+            help="Process-only liveness (Docker HEALTHCHECK). Always ok if process answers.",
+        ),
+    ] = False,
     check_broker: Annotated[
         bool,
-        typer.Option("--check-broker", help="With --readiness, also verify paper broker."),
+        typer.Option("--check-broker", help="Also verify paper broker when checking ops."),
     ] = False,
     db: Annotated[
         Path | None,
-        typer.Option("--db", help="SQLite path for readiness checks."),
+        typer.Option("--db", help="SQLite path for operational health/readiness."),
     ] = None,
 ) -> None:
-    """Report process liveness (default) or operational readiness (--readiness)."""
+    """Health: operational by default when DB known; --liveness for Docker."""
     from dividend_agent.app import readiness_payload
 
     loaded = None
@@ -107,19 +114,32 @@ def health_cmd(
         except ConfigError as exc:
             err_console.print(f"[red]config error:[/red] {exc}")
             raise typer.Exit(code=2) from exc
-    if not readiness:
-        console.print_json(json.dumps(health_payload(loaded)))
-        return
     db_path = db
+    # Do not force strategy default /data/... when the file is absent (local laptop).
     if db_path is None and loaded is not None:
-        db_path = Path(loaded.storage.sqlite_path)
-    report = readiness_payload(
-        config=loaded,
+        candidate = Path(loaded.storage.sqlite_path)
+        if candidate.exists():
+            db_path = candidate
+    if readiness:
+        report = readiness_payload(
+            config=loaded,
+            db_path=db_path,
+            check_broker=check_broker,
+        )
+        console.print_json(json.dumps(report))
+        if report.get("status") == "not_ready":
+            raise typer.Exit(code=1)
+        return
+    payload = health_payload(
+        loaded,
+        liveness_only=liveness,
         db_path=db_path,
         check_broker=check_broker,
     )
-    console.print_json(json.dumps(report))
-    if report.get("status") == "not_ready":
+    console.print_json(json.dumps(payload))
+    # Exit 1 only when not_ready/unhealthy (failed jobs/cycles/DB). Degraded
+    # (pending approvals, no jobs yet) keeps status≠ok but exit 0 for scripts.
+    if payload.get("status") == "unhealthy" and not liveness:
         raise typer.Exit(code=1)
 
 

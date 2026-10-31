@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Backup SQLite data + optional reports/logs. Safe for operator cron on TrueNAS.
+# Backup SQLite data + optional reports/logs. Prefer online SQLite backup API
+# for a consistent DB copy; fall back to tar of the data dir.
+# Pausing new orders alone does not stop DB writes — stop/restart the agent
+# around restore; for backup, sqlite3 .backup is consistent without full stop.
 set -euo pipefail
 
 SRC_DATA="${1:-/data}"
@@ -21,7 +24,24 @@ if [[ ! -d "$SRC_DATA" ]]; then
   exit 1
 fi
 
-# Brief quiesce tip: stop or pause the agent for a clean SQLite copy when possible.
+db_src=""
+for candidate in "$SRC_DATA/agent.sqlite3" "$SRC_DATA"/*.sqlite3; do
+  if [[ -f "$candidate" ]]; then
+    db_src="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$db_src" ]] && command -v sqlite3 >/dev/null 2>&1; then
+  db_dest="$DEST/agent-$(basename "$db_src" .sqlite3)-$ts.sqlite3"
+  # Online backup API — consistent snapshot even with WAL writers.
+  sqlite3 "$db_src" ".backup '$db_dest'"
+  echo "sqlite_backup=$db_dest" >>"$manifest"
+  echo "Wrote consistent SQLite backup $db_dest"
+else
+  echo "sqlite_backup=skipped (no .sqlite3 or sqlite3 CLI)" >>"$manifest"
+fi
+
 archive="$DEST/agent-data-$ts.tar.gz"
 tar -czf "$archive" -C "$SRC_DATA" .
 echo "data_archive=$archive" >>"$manifest"

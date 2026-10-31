@@ -307,3 +307,20 @@ class LedgerRepository:
 
     def list_accounts(self) -> list[sqlite3.Row]:
         return list(self._conn.execute("SELECT * FROM accounts ORDER BY account_id"))
+
+    def upsert_ingestion_cursor(self, name: str, value: str) -> None:
+        """Retain broker pagination / sync markers (migration 007+)."""
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO ingestion_cursors (cursor_name, cursor_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(cursor_name) DO UPDATE SET
+                    cursor_value=excluded.cursor_value,
+                    updated_at=excluded.updated_at
+                """,
+                (name, value, _now()),
+            )
+        except sqlite3.OperationalError:
+            # Pre-007 schemas: ignore quietly
+            return

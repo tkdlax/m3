@@ -18,7 +18,8 @@ run() {
 echo "== version =="
 run dividend-agent version
 
-echo "== health =="
+echo "== health (liveness + local without DB) =="
+run dividend-agent health --liveness
 run dividend-agent health --config config/strategy.example.yaml
 
 echo "== config validate =="
@@ -46,5 +47,9 @@ fi
 
 echo "== ledger migrate =="
 run dividend-agent ledger migrate --db "$SMOKE_DB"
+
+echo "== operational health after migrate (may be degraded; must not crash) =="
+run dividend-agent health --db "$SMOKE_DB" || true
+run dividend-agent health --readiness --db "$SMOKE_DB" || true
 
 echo "Smoke OK (fail-closed paths behaved as expected)."

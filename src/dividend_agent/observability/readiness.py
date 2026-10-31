@@ -1,8 +1,8 @@
-"""Operational readiness beyond process liveness (Milestone E).
+"""Operational readiness beyond process liveness (Milestone F).
 
-Liveness (`health`) stays green for Docker HEALTHCHECK. Readiness reports
-database access, recent job success/failure, open cycles, approvals, and
-optional broker/data signals — without requiring TrueNAS host access.
+Docker HEALTHCHECK must use ``health --liveness`` (process-only). Operational
+``health`` (default when a DB path is available) and ``health --readiness``
+report degraded/not_ready when scheduled work is failing — never ``ok`` then.
 """
 
 from __future__ import annotations
@@ -130,29 +130,70 @@ def _job_checks(
     now: datetime,
     stale_after_hours: float,
 ) -> None:
+    # Recent failures in job_runs (24h) → fail (scheduled work failing).
     try:
         failed = conn.execute(
             """
             SELECT job_name, detail, finished_at FROM job_runs
             WHERE status = 'failed'
-            ORDER BY id DESC LIMIT 5
+            ORDER BY id DESC LIMIT 10
             """
         ).fetchall()
     except sqlite3.OperationalError as exc:
         checks.append(ReadinessCheck(name="job_runs", status="fail", detail=str(exc)))
         return
 
-    if failed:
-        latest = failed[0]
+    recent_fail = None
+    for row in failed:
+        finished = row["finished_at"]
+        if not finished:
+            recent_fail = row
+            break
+        try:
+            ft = datetime.fromisoformat(str(finished))
+            if ft.tzinfo is None:
+                ft = ft.replace(tzinfo=UTC)
+            if now - ft <= timedelta(hours=24):
+                recent_fail = row
+                break
+        except ValueError:
+            recent_fail = row
+            break
+
+    if recent_fail is not None:
+        detail = str(recent_fail["detail"] or "")[:120]
         checks.append(
             ReadinessCheck(
                 name="recent_job_failures",
-                status="warn",
-                detail=f"{latest['job_name']}: {latest['detail'][:120]}",
+                status="fail",
+                detail=f"{recent_fail['job_name']}: {detail}",
             )
         )
     else:
         checks.append(ReadinessCheck(name="recent_job_failures", status="pass", detail="none"))
+
+    # Also inspect job_keys with status=failed
+    try:
+        failed_keys = conn.execute(
+            """
+            SELECT job_name, period_key, updated_at FROM job_keys
+            WHERE status = 'failed'
+            ORDER BY updated_at DESC LIMIT 5
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        failed_keys = []
+    if failed_keys:
+        latest = failed_keys[0]
+        checks.append(
+            ReadinessCheck(
+                name="failed_job_keys",
+                status="fail",
+                detail=f"{latest['job_name']}@{latest['period_key']}",
+            )
+        )
+    else:
+        checks.append(ReadinessCheck(name="failed_job_keys", status="pass", detail="none"))
 
     try:
         keys = conn.execute(
@@ -186,8 +227,12 @@ def _job_checks(
             checks.append(
                 ReadinessCheck(
                     name="job_freshness",
-                    status="warn",
-                    detail=f"last success {newest} age_hours={age.total_seconds() / 3600:.1f}",
+                    status="fail",
+                    detail=(
+                        f"last success {newest} "
+                        f"age_hours={age.total_seconds() / 3600:.1f} "
+                        f"(stale>{stale_after_hours}h)"
+                    ),
                 )
             )
         else:
@@ -217,17 +262,34 @@ def _cycle_checks(conn: sqlite3.Connection, checks: list[ReadinessCheck]) -> Non
             SELECT COUNT(*) AS c FROM paper_cycles WHERE status = 'blocked'
             """
         ).fetchone()
+        failed = conn.execute(
+            """
+            SELECT COUNT(*) AS c FROM paper_cycles
+            WHERE status IN ('failed', 'error')
+            """
+        ).fetchone()
+        # Stale in-progress cycles (>48h without update)
+        stale = conn.execute(
+            """
+            SELECT COUNT(*) AS c FROM paper_cycles
+            WHERE status IN ('in_progress', 'awaiting_fill')
+              AND updated_at < ?
+            """,
+            ((datetime.now(UTC) - timedelta(hours=48)).replace(microsecond=0).isoformat(),),
+        ).fetchone()
     except sqlite3.OperationalError:
         checks.append(ReadinessCheck(name="paper_cycles", status="pass", detail="table_absent"))
         return
     open_n = int(open_cycles["c"]) if open_cycles else 0
     blocked_n = int(blocked["c"]) if blocked else 0
-    status = "warn" if blocked_n else "pass"
+    failed_n = int(failed["c"]) if failed else 0
+    stale_n = int(stale["c"]) if stale else 0
+    status = "fail" if failed_n or blocked_n or stale_n else "pass"
     checks.append(
         ReadinessCheck(
             name="paper_cycles",
             status=status,
-            detail=f"open={open_n} blocked={blocked_n}",
+            detail=f"open={open_n} blocked={blocked_n} failed={failed_n} stale={stale_n}",
         )
     )
 

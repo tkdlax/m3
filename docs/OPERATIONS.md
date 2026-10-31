@@ -65,11 +65,12 @@ dividend-agent scheduler status --db /data/agent.sqlite3
 
 | Command | Purpose |
 |---|---|
-| `dividend-agent health` | Process liveness (Compose HEALTHCHECK) |
-| `dividend-agent health --readiness --db …` | DB, job freshness, open cycles, approvals, unhandled assignments |
-| `… --readiness --check-broker` | Also verify paper credentials |
+| `dividend-agent health --liveness` | Process liveness only (Compose HEALTHCHECK) |
+| `dividend-agent health --db …` | Operational health: **not** `ok` when recent jobs/cycles failed |
+| `dividend-agent health --readiness --db …` | Full readiness report (DB, job freshness, cycles, approvals, assignments) |
+| `… --check-broker` | Also verify paper credentials |
 
-TrueNAS host validation checklist: [TRUENAS_OPERATOR_CHECKLIST.md](TRUENAS_OPERATOR_CHECKLIST.md) (Milestone F — not claimed done by E).
+TrueNAS host validation checklist (Jake paths): [TRUENAS_OPERATOR_CHECKLIST.md](TRUENAS_OPERATOR_CHECKLIST.md). Spec: [PROJECT_SPEC.md](PROJECT_SPEC.md). **SCALE hardware validation is not claimed by this repo.**
 
 ## Common commands
 

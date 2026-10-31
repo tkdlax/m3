@@ -241,8 +241,12 @@ def test_restart_recovery_under_paper_auto_unpaused(tmp_path: Path) -> None:
 
 
 def test_readiness_detects_db_and_jobs(tmp_path: Path) -> None:
-    live = health_payload(AppConfig())
+    live = health_payload(AppConfig(), liveness_only=True)
     assert live["status"] == "ok"
+    # Without an existing DB path, default health stays liveness (not false unhealthy).
+    bare = health_payload(AppConfig())
+    assert bare["status"] == "ok"
+    assert bare.get("kind") == "liveness"
 
     db = tmp_path / "ready.sqlite3"
     open_migrated(db).close()
@@ -251,6 +255,9 @@ def test_readiness_detects_db_and_jobs(tmp_path: Path) -> None:
     names = {c["name"] for c in report["checks"]}
     assert "database" in names
     assert "job_freshness" in names
+    ops = health_payload(AppConfig(), db_path=db)
+    assert ops["kind"] == "operational"
+    assert ops["status"] in {"ok", "degraded", "unhealthy"}
 
     # Missing DB parent that cannot be created? use invalid path device
     bad = readiness_payload(config=AppConfig(), db_path="/proc/does-not-exist/agent.sqlite3")

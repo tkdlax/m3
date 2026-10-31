@@ -14,7 +14,7 @@ Paper-only autonomous agent that researches established U.S. dividend equities, 
 | M3 Options engine | Done |
 | M4 Paper execution | Done |
 | M5 Autonomous scheduler | Done (unattended dry-run defaults + readiness in E) |
-| M6 TrueNAS release | Operator checklist only — host validation not attested |
+| M6 TrueNAS release | Offline F ready: readiness/P&L/uv.lock/Jake checklist — **SCALE host not attested** |
 
 Default mode: **`paper_dry_run`** with **`TRADING_PAUSED=true`**. Default scheduler jobs: **`startup,trading_day,monthly`**.
 
@@ -43,7 +43,7 @@ docker compose exec agent dividend-agent config validate /config/strategy.yaml
 
 ### TrueNAS SCALE
 
-Follow **[docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT.md)** (datasets UID/GID **10001**, `compose.yaml` + `compose.truenas.yaml`).
+Follow **[docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT.md)** and Jake-host commands in **[docs/TRUENAS_OPERATOR_CHECKLIST.md](docs/TRUENAS_OPERATOR_CHECKLIST.md)** (`/mnt/RJMSA_Nas/dividend-agent/…`, UID/GID **10001**). Host validation is an operator step — not claimed done by CI.
 
 ### Promote path (paper_auto)
 
@@ -54,7 +54,7 @@ Follow **[docs/TRUENAS_DEPLOYMENT.md](docs/TRUENAS_DEPLOYMENT.md)** (datasets UI
 5. `config validate --check-auto-submit` → `./scripts/promote_paper_auto.sh …`
 6. Set `TRADING_PAUSED=false` only when intentionally enabling paper submits
 
-Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices: PROJECT_SPEC §21 / [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
+Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Spec: [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md). Remaining open policy choices: PROJECT_SPEC §21 / [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
 ## Safety model
 
@@ -68,7 +68,7 @@ Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices
 
 | Command | Behavior |
 |---|---|
-| `dividend-agent health` / `version` | Local health |
+| `dividend-agent health [--liveness\|--readiness] [--db]` | Liveness / operational health (≠ok when jobs fail) |
 | `dividend-agent config validate PATH [--check-auto-submit]` | Schema + paper-only; optional auto-submit blockers |
 | `dividend-agent broker verify-paper \| reconcile \| status` | Paper attestation + ledger sync |
 | `dividend-agent research symbol\|screen` | SEC-backed research |
@@ -80,6 +80,7 @@ Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices
 
 ## Documentation
 
+- [PROJECT_SPEC](docs/PROJECT_SPEC.md) · [TRUENAS_OPERATOR_CHECKLIST](docs/TRUENAS_OPERATOR_CHECKLIST.md) (Jake host)
 - [TRUENAS_DEPLOYMENT](docs/TRUENAS_DEPLOYMENT.md) · [OPERATIONS](docs/OPERATIONS.md) · [RELEASE_NOTES](docs/RELEASE_NOTES.md)
 - [STRATEGY](docs/STRATEGY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [ALPACA_INTEGRATION](docs/ALPACA_INTEGRATION.md)
 - [SECURITY](docs/SECURITY.md) · [RISK_AND_LIMITATIONS](docs/RISK_AND_LIMITATIONS.md)

@@ -40,8 +40,10 @@ COPY --chmod=755 scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 WORKDIR /app
 USER agent
 
-# Liveness only — readiness is `dividend-agent health --readiness --db /data/agent.sqlite3`
+# Process liveness only (does not flap on job failures). Operational status:
+#   dividend-agent health --db /data/agent.sqlite3
+#   dividend-agent health --readiness --db /data/agent.sqlite3
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD dividend-agent health || exit 1
+  CMD dividend-agent health --liveness || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

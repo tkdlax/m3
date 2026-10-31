@@ -26,11 +26,11 @@ Create a parent dataset, e.g. `tank/apps/dividend-agent`, with children:
 | `.../config` | host file → `/config/strategy.yaml` | private strategy (not the example forever) |
 
 ```bash
-# On TrueNAS (paths illustrative)
-install -d -o 10001 -g 10001 -m 0750 /mnt/tank/apps/dividend-agent/{data,reports,logs,config}
-cp strategy.example.yaml /mnt/tank/apps/dividend-agent/config/strategy.yaml
-chown 10001:10001 /mnt/tank/apps/dividend-agent/config/strategy.yaml
-chmod 0640 /mnt/tank/apps/dividend-agent/config/strategy.yaml
+# Jake host (canonical checklist paths) — see TRUENAS_OPERATOR_CHECKLIST.md
+install -d -o 10001 -g 10001 -m 0750 /mnt/RJMSA_Nas/dividend-agent/{data,reports,logs,config,backup}
+cp config/strategy.example.yaml /mnt/RJMSA_Nas/dividend-agent/config/strategy.yaml
+chown 10001:10001 /mnt/RJMSA_Nas/dividend-agent/config/strategy.yaml
+chmod 0640 /mnt/RJMSA_Nas/dividend-agent/config/strategy.yaml
 ```
 
 ACL tip: grant the Apps user **UID/GID 10001** modify on data/reports/logs; config may be root-owned read-only for the container.
@@ -75,18 +75,19 @@ Without paper keys, the container stays healthy; startup scheduler cycles may lo
 ## 5. Backup and restore
 
 ```bash
-# From host, with datasets mounted or via exec
-./scripts/backup.sh /mnt/tank/apps/dividend-agent/data ./backup \
-  /mnt/tank/apps/dividend-agent/reports \
-  /mnt/tank/apps/dividend-agent/logs
+# Jake host — see TRUENAS_OPERATOR_CHECKLIST.md for full command set
+./scripts/backup.sh /mnt/RJMSA_Nas/dividend-agent/data \
+  /mnt/RJMSA_Nas/dividend-agent/backup \
+  /mnt/RJMSA_Nas/dividend-agent/reports \
+  /mnt/RJMSA_Nas/dividend-agent/logs
 
 # Emergency restore (stop agent first)
 docker compose stop agent
-./scripts/restore.sh ./backup/agent-data-YYYYMMDD….tar.gz \
-  /mnt/tank/apps/dividend-agent/data \
-  ./backup/agent-reports-….tar.gz \
-  /mnt/tank/apps/dividend-agent/reports
-chown -R 10001:10001 /mnt/tank/apps/dividend-agent/{data,reports}
+./scripts/restore.sh /mnt/RJMSA_Nas/dividend-agent/backup/agent-data-YYYYMMDD….tar.gz \
+  /mnt/RJMSA_Nas/dividend-agent/data \
+  /mnt/RJMSA_Nas/dividend-agent/backup/agent-reports-….tar.gz \
+  /mnt/RJMSA_Nas/dividend-agent/reports
+chown -R 10001:10001 /mnt/RJMSA_Nas/dividend-agent/{data,reports}
 docker compose start agent
 ```
 
@@ -100,10 +101,12 @@ cp .env.example .env   # only merge new keys; do not clobber secrets
 docker compose -f compose.yaml -f compose.truenas.yaml --env-file .env pull  # if using registry
 docker compose -f compose.yaml -f compose.truenas.yaml --env-file .env up -d --build
 docker compose exec agent dividend-agent ledger migrate --db /data/agent.sqlite3
-docker compose exec agent dividend-agent health
+docker compose exec agent dividend-agent health --liveness
+docker compose exec agent dividend-agent health --db /data/agent.sqlite3
 ```
 
 Migrations are additive SQLite files under `src/dividend_agent/storage/migrations/`.
+Host acceptance remains an operator checklist — do not claim SCALE validation from Compose alone.
 
 ## 7. Rollback
 
