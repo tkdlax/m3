@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from dividend_agent import __version__
 from dividend_agent.brokers.interface import (
@@ -15,6 +16,7 @@ from dividend_agent.domain.models import OperatingMode
 
 
 def health_payload(config: AppConfig | None = None) -> dict[str, object]:
+    """Process liveness — safe for Docker HEALTHCHECK (no broker/DB required)."""
     mode = config.mode.value if config else OperatingMode.PAPER_DRY_RUN.value
     return {
         "status": "ok",
@@ -23,6 +25,24 @@ def health_payload(config: AppConfig | None = None) -> dict[str, object]:
         "paper_only": True,
         "live_trading": False,
     }
+
+
+def readiness_payload(
+    *,
+    config: AppConfig | None = None,
+    db_path: str | Path | None = None,
+    environ: dict[str, str] | None = None,
+    check_broker: bool = False,
+) -> dict[str, Any]:
+    """Operational readiness — DB/jobs/cycles/approvals; optional broker."""
+    from dividend_agent.observability.readiness import assess_readiness
+
+    return assess_readiness(
+        config=config,
+        db_path=db_path,
+        environ=environ,
+        check_broker=check_broker,
+    ).to_dict()
 
 
 def boot_dry_run(config_path: str | Path) -> AppConfig:

@@ -159,17 +159,19 @@ def job_trading_day(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> 
         not in {"filled", "canceled", "cancelled", "expired", "rejected"}
     ]
     activities = deps.broker.list_activities(page_size=50)
-    assign_like = [
-        a
-        for a in activities
-        if (a.activity_type or "").upper() in {"OPASN", "ASSIGN", "EXERCISE", "OPEXP", "EXP"}
-    ]
     dividends = [a for a in activities if (a.activity_type or "").upper().startswith("DIV")]
+
+    # Milestone E: persist assignment/expiry outcomes with ingestion cursor.
+    from dividend_agent.execution.assignment_monitor import AssignmentMonitor
+
+    monitor = AssignmentMonitor(runner.conn, alerts=alerts)
+    assignment_result = monitor.scan_broker(deps.broker, account_id=account_id)
 
     payload: dict[str, Any] = {
         "account_id": account_id,
         "open_orders": len(open_orders),
-        "assignments_or_expiry": len(assign_like),
+        "assignments_or_expiry": assignment_result.assignments + assignment_result.expiries,
+        "assignment_monitor": assignment_result.to_dict(),
         "dividend_events": len(dividends),
         "mismatches": recon.mismatches,
         "trading_paused": paused,
@@ -184,14 +186,6 @@ def job_trading_day(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> 
             severity="warning",
             payload=payload,
         )
-    if assign_like:
-        alerts.emit(
-            "assignment_or_expiry",
-            "Assignment/expiry activity detected",
-            body=f"{len(assign_like)} event(s)",
-            severity="warning",
-            payload={"count": len(assign_like)},
-        )
     if dividends:
         alerts.emit(
             "dividend_event",
@@ -201,52 +195,64 @@ def job_trading_day(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> 
             payload={"count": len(dividends)},
         )
 
-    # Recover ambiguous local orders (read/repair; submit only if not paused + paper_auto)
+    # Recover ambiguous local orders. Always sync broker truth; resubmit only when
+    # unpaused + paper_auto (paper_auto remains gated).
     exec_repo = ExecutionRepository(runner.conn)
+    from dividend_agent.execution.approval_queue import ApprovalQueue
+    from dividend_agent.execution.order_manager import OrderManager
+    from dividend_agent.execution.states import OrderState
+
+    mgr = OrderManager(
+        config=deps.config,
+        broker=deps.broker,
+        repo=exec_repo,
+        approvals=ApprovalQueue(exec_repo),
+        environ=deps.environ,
+    )
+    # Expire stale approvals every trading day (unattended hygiene).
+    expired_approvals = ApprovalQueue(exec_repo).expire_stale()
     ambiguous = [
-        *exec_repo.list_orders(state="submitted"),
-        *exec_repo.list_orders(state="reconciliation_needed"),
+        *exec_repo.list_orders(state=OrderState.SUBMITTED.value),
+        *exec_repo.list_orders(state=OrderState.RECONCILIATION_NEEDED.value),
     ]
     recovered = 0
-    if ambiguous and not paused and deps.config.mode == OperatingMode.PAPER_AUTO:
-        from dividend_agent.execution.approval_queue import ApprovalQueue
-        from dividend_agent.execution.order_manager import OrderManager
-
-        mgr = OrderManager(
-            config=deps.config,
-            broker=deps.broker,
-            repo=exec_repo,
-            approvals=ApprovalQueue(exec_repo),
-            environ=deps.environ,
-        )
-        for row in ambiguous:
-            try:
+    synced = 0
+    for row in ambiguous:
+        try:
+            if paused or deps.config.mode != OperatingMode.PAPER_AUTO:
+                # Sync-only path: refresh from broker without resubmit.
+                mgr.refresh_from_broker(row["client_order_id"])
+                synced += 1
+            else:
                 mgr.recover_after_restart(row["client_order_id"])
                 recovered += 1
-            except Exception as exc:  # noqa: BLE001
-                alerts.emit(
-                    "order_recovery_failed",
-                    "Order recovery failed",
-                    body=str(exc),
-                    severity="error",
-                    payload={"client_order_id": row["client_order_id"]},
-                )
-    elif ambiguous and paused:
+        except Exception as exc:  # noqa: BLE001
+            alerts.emit(
+                "order_recovery_failed",
+                "Order recovery failed",
+                body=str(exc),
+                severity="error",
+                payload={"client_order_id": row["client_order_id"]},
+            )
+    if ambiguous and paused:
         alerts.emit(
             "trading_paused",
-            "Trading paused — skipped order recovery submits",
-            body=f"{len(ambiguous)} ambiguous order(s) left untouched",
+            "Trading paused — synced ambiguous orders without resubmit",
+            body=f"{len(ambiguous)} ambiguous order(s); synced={synced}",
             severity="info",
-            payload={"ambiguous": len(ambiguous)},
+            payload={"ambiguous": len(ambiguous), "synced": synced},
         )
 
     # Advance open supervised cycles (fills / approvals / restart-safe stages).
     cycle_advances = _advance_open_cycles(runner, deps, paused=paused)
     payload["recovered_orders"] = recovered
+    payload["synced_orders"] = synced
+    payload["approvals_expired"] = expired_approvals
     payload["cycle_advances"] = cycle_advances
     detail = (
         f"trading_day open_orders={len(open_orders)} paused={paused} "
-        f"recovered={recovered} cycles={len(cycle_advances)}"
+        f"recovered={recovered} synced={synced} "
+        f"assignments={assignment_result.new_events} cycles={len(cycle_advances)}"
     )
     return JobResult(
         job_name="trading_day",

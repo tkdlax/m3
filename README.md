@@ -13,10 +13,10 @@ Paper-only autonomous agent that researches established U.S. dividend equities, 
 | M2 Research | Done |
 | M3 Options engine | Done |
 | M4 Paper execution | Done |
-| M5 Autonomous scheduler | Done |
-| M6 TrueNAS release | In progress (this tree) |
+| M5 Autonomous scheduler | Done (unattended dry-run defaults + readiness in E) |
+| M6 TrueNAS release | Operator checklist only — host validation not attested |
 
-Default mode: **`paper_dry_run`** with **`TRADING_PAUSED=true`**.
+Default mode: **`paper_dry_run`** with **`TRADING_PAUSED=true`**. Default scheduler jobs: **`startup,trading_day,monthly`**.
 
 ## Operator quickstart (no source edits)
 

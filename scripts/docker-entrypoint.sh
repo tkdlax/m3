@@ -9,7 +9,7 @@ REPORTS_DIR="${REPORTS_DIR:-/reports}"
 SCHEDULER_ENABLED="${SCHEDULER_ENABLED:-true}"
 SCHEDULER_INTERVAL_SEC="${SCHEDULER_INTERVAL_SEC:-3600}"
 REQUIRE_PAPER_ON_START="${REQUIRE_PAPER_ON_START:-false}"
-SCHEDULER_JOBS="${SCHEDULER_JOBS:-startup,trading_day}"
+SCHEDULER_JOBS="${SCHEDULER_JOBS:-startup,trading_day,monthly}"
 
 echo "[entrypoint] dividend-agent boot (paper-only; TRADING_PAUSED=${TRADING_PAUSED:-unset})"
 

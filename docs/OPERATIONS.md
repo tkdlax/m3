@@ -45,12 +45,11 @@ Idempotent jobs under a single SQLite worker lock. Period keys prevent duplicate
 | Job | Cadence | Behavior |
 |---|---|---|
 | `startup` | Each boot / daily | Verify paper, schema, secrets presence, clock, capabilities; reconcile; expire stale approvals |
-| `trading_day` | Exchange trading days | Reconcile, open orders, assignment/expiry + dividend alerts, drift; skip holidays; `skipped_paused` when kill switch on |
-| `monthly` | Calendar month | Invokes research for `--research-symbols`, starts supervised cycles, evaluates 100-share lots, routes selected calls through the gateway (submit still gated by mode/pause), monthly JSON report |
+| `trading_day` | Exchange trading days | Reconcile, open orders, assignment/expiry monitor (persisted), dividend alerts, drift; expire approvals; sync/recover ambiguous orders; advance open cycles; skip holidays; `skipped_paused` when kill switch on |
+| `monthly` | Calendar month | Research for `--research-symbols`, supervised cycles, 100-share lot evaluation, gateway propose (submit gated by mode/pause), period-scoped monthly JSON report |
 | `event_review` | On demand | Focused review for fills / corp actions / outages / mismatches |
-| `trading_day` (D) | Exchange days | Also advances open supervised cycles (fill confirmation → call → reconcile) |
 
-Supervised cycle stages: **research → stock buy → confirmed fill → covered call → reconcile**. Calls are never written against unfilled stock buys. Defaults remain `paper_dry_run` + `TRADING_PAUSED=true` (propose/READY only). Enable monthly explicitly:
+Supervised cycle stages: **research → stock buy → confirmed fill → covered call → reconcile**. Calls are never written against unfilled stock buys. Defaults remain `paper_dry_run` + `TRADING_PAUSED=true`. **Default container jobs are `startup,trading_day,monthly`** (safe under dry_run; `paper_auto` submit still gated).
 
 ```bash
 dividend-agent scheduler run --jobs startup,trading_day,monthly \
@@ -58,8 +57,19 @@ dividend-agent scheduler run --jobs startup,trading_day,monthly \
   --config /config/strategy.yaml --db /data/agent.sqlite3 --reports /reports
 dividend-agent scheduler cycle GIS --chain /path/to/chain.json --stock-limit 40 \
   --db /data/agent.sqlite3 --config /config/strategy.yaml
+dividend-agent health --readiness --db /data/agent.sqlite3
 dividend-agent scheduler status --db /data/agent.sqlite3
 ```
+
+## Readiness vs liveness
+
+| Command | Purpose |
+|---|---|
+| `dividend-agent health` | Process liveness (Compose HEALTHCHECK) |
+| `dividend-agent health --readiness --db …` | DB, job freshness, open cycles, approvals, unhandled assignments |
+| `… --readiness --check-broker` | Also verify paper credentials |
+
+TrueNAS host validation checklist: [TRUENAS_OPERATOR_CHECKLIST.md](TRUENAS_OPERATOR_CHECKLIST.md) (Milestone F — not claimed done by E).
 
 ## Common commands
 
