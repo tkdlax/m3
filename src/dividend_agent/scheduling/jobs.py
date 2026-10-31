@@ -240,8 +240,14 @@ def job_trading_day(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> 
             payload={"ambiguous": len(ambiguous)},
         )
 
+    # Advance open supervised cycles (fills / approvals / restart-safe stages).
+    cycle_advances = _advance_open_cycles(runner, deps, paused=paused)
     payload["recovered_orders"] = recovered
-    detail = f"trading_day open_orders={len(open_orders)} paused={paused} recovered={recovered}"
+    payload["cycle_advances"] = cycle_advances
+    detail = (
+        f"trading_day open_orders={len(open_orders)} paused={paused} "
+        f"recovered={recovered} cycles={len(cycle_advances)}"
+    )
     return JobResult(
         job_name="trading_day",
         period_key=period_key,
@@ -288,44 +294,26 @@ def job_monthly(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> JobR
                 }
             )
 
-    research_note = (
-        f"refresh_requested_for={list(deps.research_symbols)}"
-        if deps.research_symbols
-        else "no research symbols configured for this cycle"
+    # Milestone D: invoke research + supervised cycle (not just a refresh note).
+    orchestration = _run_monthly_orchestration(
+        runner,
+        deps,
+        account_id=recon.account_id,
+        lots_100=lots_100,
+        paused=paused,
+        alerts=alerts,
     )
-    call_selection: dict[str, Any] = {
-        "evaluated_lots": len(lots_100),
-        "intents": 0,
-        "skipped": [],
-        "trading_paused": paused,
-        "mode": deps.config.mode.value,
-    }
-    if lots_100 and deps.option_chain_path and deps.option_chain_path.exists():
-        # Explicit fixture/replay path (tests / offline).
-        call_selection.update(_evaluate_chain_for_lots(deps, lots_100, paused=paused))
-        call_selection["chain_mode"] = "fixture_replay"
-    elif lots_100 and deps.market_data is not None:
-        try:
-            call_selection.update(_evaluate_live_market_data(deps, lots_100, paused=paused))
-            call_selection["chain_mode"] = "live_market_data"
-        except (MarketDataError, PaperNotVerifiedError) as exc:
-            call_selection["skipped"].append(f"market_data_unavailable:{exc}")
-            call_selection["chain_mode"] = "failed_closed"
-            alerts.emit(
-                "market_data_unavailable",
-                "Monthly call selection skipped — market data unavailable",
-                body=str(exc),
-                severity="error",
-                payload={"error": str(exc)},
-            )
-    elif lots_100:
-        call_selection["skipped"].append(
-            "market_data_unconfigured — no live chain; fixture path not provided"
-        )
-        call_selection["chain_mode"] = "unconfigured"
-    else:
-        call_selection["skipped"].append("no_100_share_lots — research/report only")
-        call_selection["chain_mode"] = "no_lots"
+    research_note = orchestration.get("research_note", "no research symbols configured")
+    call_selection = orchestration.get(
+        "call_selection",
+        {
+            "evaluated_lots": len(lots_100),
+            "intents": 0,
+            "skipped": [],
+            "trading_paused": paused,
+            "mode": deps.config.mode.value,
+        },
+    )
 
     report = build_monthly_report(runner.conn, account_id=recon.account_id, period_key=period_key)
     report.skipped_opportunities = list(call_selection.get("skipped") or [])
@@ -344,6 +332,7 @@ def job_monthly(runner: SchedulerRunner, period_key: str, deps: JobDeps) -> JobR
         "partial_accumulation": partials,
         "research": research_note,
         "call_selection": call_selection,
+        "cycles": orchestration.get("cycles", []),
         "report_path": str(report_path),
         "trading_paused": paused,
     }
@@ -416,6 +405,273 @@ def job_event_review(runner: SchedulerRunner, period_key: str, deps: JobDeps) ->
         detail=f"reviewed {period_key} (paper unverified)",
         payload={"event_type": event_type or "unknown"},
     )
+
+
+def _advance_open_cycles(
+    runner: SchedulerRunner, deps: JobDeps, *, paused: bool
+) -> list[dict[str, Any]]:
+    """Resume in-progress paper cycles (fill confirmation, call selection)."""
+    from dividend_agent.orchestration.paper_cycle import PaperCycleOrchestrator
+    from dividend_agent.storage.cycle_repository import CycleRepository
+
+    outcomes: list[dict[str, Any]] = []
+    repo = CycleRepository(runner.conn)
+    open_cycles = repo.list_open_cycles()
+    if not open_cycles:
+        return outcomes
+    orch = PaperCycleOrchestrator(
+        config=deps.config,
+        broker=deps.broker,
+        conn=runner.conn,
+        environ=deps.environ,
+        market_data=deps.market_data,
+        option_chain_path=deps.option_chain_path,
+    )
+    for row in open_cycles:
+        try:
+            # Paused: still allow await_fill / research progress, but gateway submit stays blocked.
+            _ = paused
+            out = orch.resume(row["cycle_id"])
+            outcomes.append(out.to_dict())
+        except Exception as exc:  # noqa: BLE001
+            outcomes.append(
+                {
+                    "cycle_id": row["cycle_id"],
+                    "symbol": row["symbol"],
+                    "status": "error",
+                    "notes": [str(exc)],
+                }
+            )
+    return outcomes
+
+
+def _run_monthly_orchestration(
+    runner: SchedulerRunner,
+    deps: JobDeps,
+    *,
+    account_id: str,
+    lots_100: list[dict[str, Any]],
+    paused: bool,
+    alerts: AlertSink,
+) -> dict[str, Any]:
+    """Research configured symbols and run/advance supervised cycles + call selection."""
+    from dividend_agent.orchestration.paper_cycle import PaperCycleOrchestrator
+    from dividend_agent.research.pipeline import ResearchPipeline
+
+    symbols = tuple(s.upper() for s in deps.research_symbols)
+    research_note = (
+        f"research_invoked_for={list(symbols)}" if symbols else "no research symbols configured"
+    )
+    cycles: list[dict[str, Any]] = []
+    pipeline: ResearchPipeline | None = None
+    if symbols:
+        try:
+            pipeline = ResearchPipeline.from_config(deps.config)
+        except Exception as exc:  # noqa: BLE001
+            research_note = f"research_pipeline_unavailable:{exc}"
+            alerts.emit(
+                "research_unavailable",
+                "Monthly research pipeline unavailable",
+                body=str(exc),
+                severity="warning",
+            )
+
+    if pipeline is not None and symbols:
+        orch = PaperCycleOrchestrator(
+            config=deps.config,
+            broker=deps.broker,
+            conn=runner.conn,
+            environ=deps.environ,
+            market_data=deps.market_data,
+            research_pipeline=pipeline,
+            option_chain_path=deps.option_chain_path,
+        )
+        for sym in symbols:
+            try:
+                out = orch.start(sym, account_id=account_id)
+                cycles.append(out.to_dict())
+            except Exception as exc:  # noqa: BLE001
+                cycles.append({"symbol": sym, "status": "error", "notes": [str(exc)]})
+                alerts.emit(
+                    "cycle_failed",
+                    f"Supervised cycle failed for {sym}",
+                    body=str(exc),
+                    severity="error",
+                )
+
+    # Call selection against confirmed 100-share lots (never against unfilled buys).
+    call_selection: dict[str, Any] = {
+        "evaluated_lots": len(lots_100),
+        "intents": 0,
+        "skipped": [],
+        "trading_paused": paused,
+        "mode": deps.config.mode.value,
+    }
+    if lots_100 and deps.option_chain_path and deps.option_chain_path.exists():
+        call_selection.update(_evaluate_chain_for_lots(deps, lots_100, paused=paused))
+        call_selection["chain_mode"] = "fixture_replay"
+        # Route executable intents through gateway (dry-run safe by default).
+        call_selection.update(
+            _gateway_process_fixture_intents(runner, deps, lots_100, paused=paused)
+        )
+    elif lots_100 and deps.market_data is not None:
+        try:
+            call_selection.update(_evaluate_live_market_data(deps, lots_100, paused=paused))
+            call_selection["chain_mode"] = "live_market_data"
+            call_selection.update(
+                _gateway_process_live_intents(runner, deps, lots_100, paused=paused)
+            )
+        except (MarketDataError, PaperNotVerifiedError) as exc:
+            call_selection["skipped"].append(f"market_data_unavailable:{exc}")
+            call_selection["chain_mode"] = "failed_closed"
+            alerts.emit(
+                "market_data_unavailable",
+                "Monthly call selection skipped — market data unavailable",
+                body=str(exc),
+                severity="error",
+                payload={"error": str(exc)},
+            )
+    elif lots_100:
+        call_selection["skipped"].append(
+            "market_data_unconfigured — no live chain; fixture path not provided"
+        )
+        call_selection["chain_mode"] = "unconfigured"
+    else:
+        call_selection["skipped"].append("no_100_share_lots — research/report only")
+        call_selection["chain_mode"] = "no_lots"
+
+    return {
+        "research_note": research_note,
+        "cycles": cycles,
+        "call_selection": call_selection,
+    }
+
+
+def _gateway_process_fixture_intents(
+    runner: SchedulerRunner,
+    deps: JobDeps,
+    lots_100: list[dict[str, Any]],
+    *,
+    paused: bool,
+) -> dict[str, Any]:
+    """Process selected fixture intents through OrderManager (no inventing fills)."""
+    from datetime import UTC, datetime, time
+    from datetime import date as date_cls
+
+    from dividend_agent.execution.approval_queue import ApprovalQueue
+    from dividend_agent.execution.order_manager import OrderManager
+    from dividend_agent.options.chains import load_chain_json
+    from dividend_agent.portfolio.lots import CoverageState, ShareLot
+    from dividend_agent.storage.execution_repository import ExecutionRepository
+    from dividend_agent.strategy.candidate_selection import select_covered_call_intents
+
+    if deps.option_chain_path is None or not deps.option_chain_path.exists():
+        return {"gateway_processed": 0}
+    chain = load_chain_json(deps.option_chain_path)
+    lot_match = next((x for x in lots_100 if x["symbol"] == chain.underlying), None)
+    if lot_match is None:
+        return {"gateway_processed": 0, "gateway_skipped": ["underlying_not_in_lots"]}
+    coverage = CoverageState(
+        symbol=lot_match["symbol"],
+        lots=(
+            ShareLot(
+                qty=Decimal(lot_match["qty"]),
+                cost_per_share=Decimal(lot_match["avg_entry"]),
+            ),
+        ),
+    )
+    chain_as_of = chain.as_of or date_cls.today()
+    result = select_covered_call_intents(
+        config=deps.config,
+        chain=chain,
+        coverage=coverage,
+        account_id="scheduler",
+        as_of=chain_as_of,
+        now=datetime.combine(chain_as_of, time(15, 0), tzinfo=UTC),
+    )
+    exec_repo = ExecutionRepository(runner.conn)
+    mgr = OrderManager(
+        config=deps.config,
+        broker=deps.broker,
+        repo=exec_repo,
+        approvals=ApprovalQueue(exec_repo),
+        environ=deps.environ,
+    )
+    processed = 0
+    states: list[str] = []
+    for intent in result.intents:
+        # Never submit when paused — process_intent still validates / dry-runs.
+        row = mgr.process_intent(intent, coverage=coverage)
+        processed += 1
+        states.append(row["state"])
+        if not paused and deps.config.mode.value == "paper_auto" and row["state"] == "ready":
+            try:
+                row = mgr.submit_ready_order(row["client_order_id"])
+                states[-1] = row["state"]
+            except Exception as exc:  # noqa: BLE001
+                states[-1] = f"submit_blocked:{exc}"
+    return {
+        "gateway_processed": processed,
+        "gateway_states": states,
+        "intents": len(result.intents),
+        "note": "intents routed through gateway; submission gated by mode/pause",
+    }
+
+
+def _gateway_process_live_intents(
+    runner: SchedulerRunner,
+    deps: JobDeps,
+    lots_100: list[dict[str, Any]],
+    *,
+    paused: bool,
+) -> dict[str, Any]:
+    from dividend_agent.execution.approval_queue import ApprovalQueue
+    from dividend_agent.execution.order_manager import OrderManager
+    from dividend_agent.market_data.service import evaluate_underlying_live
+    from dividend_agent.portfolio.lots import CoverageState, ShareLot
+    from dividend_agent.storage.execution_repository import ExecutionRepository
+
+    assert deps.market_data is not None
+    exec_repo = ExecutionRepository(runner.conn)
+    mgr = OrderManager(
+        config=deps.config,
+        broker=deps.broker,
+        repo=exec_repo,
+        approvals=ApprovalQueue(exec_repo),
+        environ=deps.environ,
+    )
+    processed = 0
+    states: list[str] = []
+    for lot in lots_100:
+        coverage = CoverageState(
+            symbol=str(lot["symbol"]),
+            lots=(
+                ShareLot(
+                    qty=Decimal(str(lot["qty"])),
+                    cost_per_share=Decimal(str(lot["avg_entry"])),
+                ),
+            ),
+        )
+        try:
+            result, _meta = evaluate_underlying_live(
+                config=deps.config,
+                market_data=deps.market_data,
+                coverage=coverage,
+                account_id="scheduler",
+            )
+        except MarketDataError:
+            continue
+        for intent in result.intents:
+            row = mgr.process_intent(intent, coverage=coverage)
+            processed += 1
+            states.append(row["state"])
+            if not paused and deps.config.mode.value == "paper_auto" and row["state"] == "ready":
+                try:
+                    row = mgr.submit_ready_order(row["client_order_id"])
+                    states[-1] = row["state"]
+                except Exception as exc:  # noqa: BLE001
+                    states[-1] = f"submit_blocked:{exc}"
+    return {"gateway_processed": processed, "gateway_states": states}
 
 
 def _evaluate_chain_for_lots(

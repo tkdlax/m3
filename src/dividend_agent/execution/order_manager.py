@@ -428,6 +428,11 @@ class OrderManager:
         return coverage
 
     def _try_reserve(self, intent: TradeIntent, client_order_id: str) -> bool:
+        # Equity buys add shares — no share reservation / encumbrance.
+        if (intent.extras or {}).get("intent_kind") == "stock_buy" or (
+            intent.side.lower() in {"buy", "buy_to_cover"} and intent.strike is None
+        ):
+            return True
         underlying = underlying_from_intent(intent)
         if underlying is None:
             return False
@@ -445,6 +450,26 @@ class OrderManager:
             available_unencumbered=str(avail),
         )
 
+    def refresh_from_broker(self, client_order_id: str) -> dict[str, Any]:
+        """Sync local order state from broker truth (fills / partials)."""
+        row = self._repo.get_order(client_order_id)
+        if row is None:
+            raise OrderManagerError(f"unknown order {client_order_id}")
+        try:
+            existing = self._broker.get_order_by_client_id(client_order_id)
+        except Exception as exc:  # noqa: BLE001
+            self._transition(
+                client_order_id,
+                OrderState(row["state"]),
+                OrderState.RECONCILIATION_NEEDED,
+                detail=f"refresh_lookup_failed:{exc}",
+            )
+            return self._repo.get_order(client_order_id)  # type: ignore[return-value]
+        if existing is None:
+            return row
+        self._apply_broker_snapshot(client_order_id, existing)
+        return self._repo.get_order(client_order_id)  # type: ignore[return-value]
+
     def _classify_blocks(
         self,
         intent: TradeIntent,
@@ -459,9 +484,23 @@ class OrderManager:
         if intent.extras.get("live") or intent.extras.get("environment") == "live":
             hard.append("live_destination")
 
+        is_stock_buy = (intent.extras or {}).get("intent_kind") == "stock_buy" or (
+            intent.side.lower() in {"buy", "buy_to_cover"} and intent.strike is None
+        )
+
         if coverage is None:
-            hard.append("missing_coverage")
-            return hard, soft
+            # Stock buys may proceed with a synthetic empty coverage once underlying known.
+            if is_stock_buy:
+                underlying = underlying_from_intent(intent)
+                if underlying is None:
+                    hard.append("missing_underlying")
+                    return hard, soft
+                from dividend_agent.portfolio.lots import CoverageState as _CS
+
+                coverage = _CS(symbol=underlying)
+            else:
+                hard.append("missing_coverage")
+                return hard, soft
 
         expected_account: str | None = None
         try:
@@ -493,6 +532,7 @@ class OrderManager:
             "nonstandard_deliverable_unsupported",
             "insufficient_unencumbered_shares",
             "strike_below_wac",
+            "missing_limit_price_for_notional_check",
         }
         for reason in validate_intent_coverage(
             intent, coverage, expected_account_id=expected_account

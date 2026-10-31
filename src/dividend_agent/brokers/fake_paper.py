@@ -148,16 +148,61 @@ class FakePaperBroker(BrokerAdapter):
             self._orders_by_client[order.client_order_id] = canceled
         return canceled
 
-    def fill(self, client_order_id: str, *, filled_qty: Decimal | None = None) -> OrderSnapshot:
+    def fill(
+        self,
+        client_order_id: str,
+        *,
+        filled_qty: Decimal | None = None,
+        apply_position: bool = True,
+    ) -> OrderSnapshot:
         order = self._orders_by_client[client_order_id]
-        qty = filled_qty if filled_qty is not None else order.qty
+        order_qty = order.qty if order.qty is not None else Decimal("0")
+        qty = filled_qty if filled_qty is not None else order_qty
+        status = "filled" if qty >= order_qty else "partially_filled"
         filled = order.model_copy(
             update={
-                "status": "filled",
+                "status": status,
                 "filled_qty": qty,
                 "filled_avg_price": order.limit_price,
             }
         )
         self._orders_by_client[client_order_id] = filled
         self._orders_by_broker[order.broker_order_id] = filled
+        if apply_position and order.side.lower() in {"buy", "buy_to_cover"} and qty > 0:
+            self._apply_stock_fill(order.symbol, qty, order.limit_price or Decimal("0"))
         return filled
+
+    def _apply_stock_fill(self, symbol: str, qty: Decimal, price: Decimal) -> None:
+        for i, pos in enumerate(self._positions):
+            if pos.symbol.upper() != symbol.upper():
+                continue
+            if (pos.asset_class or "us_equity").lower() not in {"us_equity", "equity", "stock"}:
+                continue
+            new_qty = pos.qty + qty
+            # Weighted average entry
+            if new_qty > 0:
+                avg = ((pos.qty * pos.avg_entry_price) + (qty * price)) / new_qty
+            else:
+                avg = pos.avg_entry_price
+            self._positions[i] = pos.model_copy(
+                update={
+                    "qty": new_qty,
+                    "qty_available": new_qty,
+                    "avg_entry_price": avg,
+                    "market_value": new_qty * avg,
+                }
+            )
+            self._cash -= qty * price
+            return
+        self._positions.append(
+            PositionSnapshot(
+                symbol=symbol.upper(),
+                qty=qty,
+                qty_available=qty,
+                avg_entry_price=price,
+                market_value=qty * price,
+                side="long",
+                asset_class="us_equity",
+            )
+        )
+        self._cash -= qty * price
