@@ -72,7 +72,7 @@ Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices
 | `dividend-agent config validate PATH [--check-auto-submit]` | Schema + paper-only; optional auto-submit blockers |
 | `dividend-agent broker verify-paper \| reconcile \| status` | Paper attestation + ledger sync |
 | `dividend-agent research symbol\|screen` | SEC-backed research |
-| `dividend-agent options evaluate` | Covered-call TradeIntents |
+| `dividend-agent options evaluate` | Covered-call TradeIntents (`--underlying` live, or fixture replay) |
 | `dividend-agent trade status\|recover` | Order lifecycle |
 | `dividend-agent approvals list\|approve\|reject` | Exception queue |
 | `dividend-agent scheduler run\|status` | Idempotent jobs |

@@ -451,9 +451,21 @@ def research_screen_cmd(
 @options_app.command("evaluate")
 def options_evaluate_cmd(
     chain_path: Annotated[
-        Path,
-        typer.Argument(help="Option chain JSON (fixture or broker export)."),
-    ],
+        Path | None,
+        typer.Argument(
+            help=(
+                "Optional option-chain JSON for replay/testing only. "
+                "Omit and pass --underlying to fetch a live chain (Milestone B)."
+            ),
+        ),
+    ] = None,
+    underlying: Annotated[
+        str | None,
+        typer.Option(
+            "--underlying",
+            help="Fetch live Alpaca option chain for this symbol (production path).",
+        ),
+    ] = None,
     config: Annotated[
         Path,
         typer.Option("--config", "-c", help="Strategy YAML."),
@@ -464,10 +476,10 @@ def options_evaluate_cmd(
         int, typer.Option(help="Shares already reserved by open short calls.")
     ] = 0,
     as_of: Annotated[
-        str | None, typer.Option(help="As-of date YYYY-MM-DD (default: chain as_of).")
+        str | None, typer.Option(help="As-of date YYYY-MM-DD (fixture replay only).")
     ] = None,
     ex_date: Annotated[
-        str | None, typer.Option(help="Next ex-dividend date YYYY-MM-DD (optional).")
+        str | None, typer.Option(help="Next ex-dividend date YYYY-MM-DD (optional override).")
     ] = None,
     set_liquidity_guardrails: Annotated[
         bool,
@@ -482,7 +494,7 @@ def options_evaluate_cmd(
     ] = False,
 ) -> None:
     """Evaluate covered-call candidates; print intents/rejections. No orders."""
-    from datetime import date
+    from datetime import UTC, date, datetime, time
     from decimal import Decimal
 
     from dividend_agent.options.chains import load_chain_json
@@ -510,40 +522,76 @@ def options_evaluate_cmd(
             }
         )
 
-    try:
-        chain = load_chain_json(chain_path)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        err_console.print(f"[red]chain error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    fixture_used = False
+    if chain_path is not None:
+        try:
+            chain = load_chain_json(chain_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            err_console.print(f"[red]chain error:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        fixture_used = True
+        as_of_date = date.fromisoformat(as_of) if as_of else (chain.as_of or date.today())
+        # Anchor "now" to as_of so historical fixtures are not rejected as stale
+        # against wall-clock time during replay evaluation.
+        eval_now = datetime.combine(as_of_date, time(15, 0), tzinfo=UTC)
+        ex_window = ExDividendWindow(ex_date=date.fromisoformat(ex_date)) if ex_date else None
+        coverage = CoverageState(
+            symbol=chain.underlying,
+            lots=(ShareLot(qty=Decimal(shares), cost_per_share=Decimal(str(wac))),),
+            shares_reserved_by_open_calls=Decimal(reserved_calls),
+        )
+        result = select_covered_call_intents(
+            config=cfg,
+            chain=chain,
+            coverage=coverage,
+            as_of=as_of_date,
+            now=eval_now,
+            ex_div=ex_window,
+        )
+        meta: dict[str, object] = {"fixture_used": True, "chain_source": chain.source}
+    elif underlying:
+        from dividend_agent.market_data.factory import create_market_data_adapter
+        from dividend_agent.market_data.interface import MarketDataError
+        from dividend_agent.market_data.service import evaluate_underlying_live
 
-    coverage = CoverageState(
-        symbol=chain.underlying,
-        lots=(ShareLot(qty=Decimal(shares), cost_per_share=Decimal(str(wac))),),
-        shares_reserved_by_open_calls=Decimal(reserved_calls),
-    )
-    from datetime import UTC, datetime, time
+        coverage = CoverageState(
+            symbol=underlying.upper(),
+            lots=(ShareLot(qty=Decimal(shares), cost_per_share=Decimal(str(wac))),),
+            shares_reserved_by_open_calls=Decimal(reserved_calls),
+        )
+        md = create_market_data_adapter()
+        try:
+            result, meta = evaluate_underlying_live(
+                config=cfg,
+                market_data=md,
+                coverage=coverage,
+                account_id="cli",
+            )
+        except MarketDataError as exc:
+            err_console.print(f"[red]market data error (fail closed):[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        if ex_date:
+            # Operator override after live fetch (still no submit).
+            err_console.print(
+                "[yellow]note:[/yellow] --ex-date override ignored on live path; "
+                "calendar comes from market data."
+            )
+    else:
+        err_console.print(
+            "[red]provide a chain JSON argument (replay) or --underlying (live)[/red]"
+        )
+        raise typer.Exit(code=2)
 
-    as_of_date = date.fromisoformat(as_of) if as_of else (chain.as_of or date.today())
-    # Anchor "now" to as_of so historical fixtures are not rejected as stale
-    # against wall-clock time during dry-run evaluation.
-    eval_now = datetime.combine(as_of_date, time(15, 0), tzinfo=UTC)
-    ex_window = ExDividendWindow(ex_date=date.fromisoformat(ex_date)) if ex_date else None
-    result = select_covered_call_intents(
-        config=cfg,
-        chain=chain,
-        coverage=coverage,
-        as_of=as_of_date,
-        now=eval_now,
-        ex_div=ex_window,
-    )
     payload = {
         "underlying": result.underlying,
         "accepted_intents": len(result.intents),
         "evaluations": [e.model_dump(mode="json") for e in result.evaluations],
         "intents": [i.model_dump(mode="json") for i in result.intents],
         "skipped": list(result.skipped),
-        "submission": "disabled_until_m4",
+        "submission": "disabled_evaluate_only",
         "liquidity_guardrails_overridden_in_memory": set_liquidity_guardrails,
+        "fixture_used": fixture_used,
+        **meta,
     }
     console.print_json(json.dumps(payload))
     if not result.intents:

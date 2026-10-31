@@ -1,8 +1,10 @@
 """Alpaca MCP adapter stub.
 
-Preferred tool interface for later milestones once official MCP capability
-names/schemas are verified for unattended paper operation (spec §7.1).
-M1 uses :class:`AlpacaPaperAdapter` (REST) for verify + ledger reads.
+Preferred tool interface once official MCP capability names/schemas are
+verified for unattended paper operation (spec §7.1). Trading REST remains in
+:class:`AlpacaPaperAdapter`; market data REST is :class:`AlpacaMarketDataRestAdapter`
+(ADR 0004). Any future MCP session for agents must stay **read-only** — never
+expose submit/cancel tools.
 """
 
 from __future__ import annotations
