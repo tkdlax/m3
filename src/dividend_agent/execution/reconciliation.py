@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from dividend_agent.brokers.interface import BrokerAdapter, require_verified_paper
+from dividend_agent.brokers.types import ActivitySnapshot, OrderSnapshot
 from dividend_agent.storage.repository import LedgerRepository
 
 
@@ -17,10 +19,11 @@ class ReconcileResult:
     job_id: int | None = None
     detail: str = ""
     mismatches: list[str] = field(default_factory=list)
+    cursors: dict[str, str] = field(default_factory=dict)
 
 
 class Reconciler:
-    """Broker → SQLite snapshot sync for M1."""
+    """Broker → SQLite snapshot sync with ingestion cursor retention (F)."""
 
     def __init__(self, broker: BrokerAdapter, repo: LedgerRepository) -> None:
         self._broker = broker
@@ -33,6 +36,7 @@ class Reconciler:
         job_id = self._repo.start_job("reconcile", account.account_id)
         try:
             positions = self._broker.list_positions()
+            # Adapters that paginate (Alpaca) return multiple pages; others one page.
             orders = self._broker.list_orders(status="all", limit=100)
             activities = self._broker.list_activities(page_size=100)
 
@@ -40,6 +44,8 @@ class Reconciler:
             self._repo.replace_holdings(account.account_id, positions)
             self._repo.upsert_orders(account.account_id, orders)
             self._repo.upsert_activities(account.account_id, activities)
+
+            cursors = self._retain_cursors(account.account_id, orders, activities)
 
             mismatches = self._detect_basic_mismatches(
                 account.account_id, len(positions), len(orders), len(activities)
@@ -56,6 +62,7 @@ class Reconciler:
                     "orders": len(orders),
                     "activities": len(activities),
                     "mismatches": mismatches,
+                    "cursors": cursors,
                 },
                 account_id=account.account_id,
                 correlation_id=str(job_id),
@@ -70,6 +77,7 @@ class Reconciler:
                 job_id=job_id,
                 detail=detail,
                 mismatches=mismatches,
+                cursors=cursors,
             )
         except Exception as exc:
             self._repo.finish_job(job_id, status="failed", detail=str(exc))
@@ -80,6 +88,44 @@ class Reconciler:
                 correlation_id=str(job_id),
             )
             raise
+
+    def _retain_cursors(
+        self,
+        account_id: str,
+        orders: Sequence[OrderSnapshot],
+        activities: Sequence[ActivitySnapshot],
+    ) -> dict[str, str]:
+        """Persist newest order/activity markers into ingestion_cursors when present."""
+        cursors: dict[str, str] = {}
+
+        newest_activity: tuple[object, str] | None = None
+        for a in activities:
+            ts = a.transaction_time
+            if ts is not None and (newest_activity is None or ts > newest_activity[0]):  # type: ignore[operator]
+                newest_activity = (ts, a.activity_id or "")
+        if newest_activity is not None:
+            ts_obj, aid = newest_activity
+            value = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
+            if aid:
+                value = f"{value}|{aid}"
+            key = f"reconcile:activities:{account_id}"
+            self._repo.upsert_ingestion_cursor(key, value)
+            cursors[key] = value
+
+        newest_order: tuple[object, str] | None = None
+        for o in orders:
+            ts = o.submitted_at or o.updated_at
+            if ts is not None and (newest_order is None or ts > newest_order[0]):  # type: ignore[operator]
+                newest_order = (ts, o.broker_order_id or "")
+        if newest_order is not None:
+            ts_obj, oid = newest_order
+            value = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
+            if oid:
+                value = f"{value}|{oid}"
+            key = f"reconcile:orders:{account_id}"
+            self._repo.upsert_ingestion_cursor(key, value)
+            cursors[key] = value
+        return cursors
 
     def _detect_basic_mismatches(
         self,

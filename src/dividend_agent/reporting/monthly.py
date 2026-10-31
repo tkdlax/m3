@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +22,8 @@ class MonthlyReport:
     realized_stock_pnl: str = "0"
     unrealized_stock_pnl: str = "0"
     total_return_note: str = (
-        "period-scoped ledger estimate; realized/unrealized stock P&L remain "
-        "placeholder until lot accounting (E partial); broker remains authoritative"
+        "period-scoped ledger estimate; see portfolio.performance methodology; "
+        "broker remains authoritative"
     )
     assignments: int = 0
     pending_approvals: int = 0
@@ -62,10 +61,9 @@ def build_monthly_report(
         if row:
             equity, cash = row["equity"], row["cash"]
 
-    dividends = _sum_activity_amount(
-        conn, account_id, ("DIV", "DIVNRA", "DIVFEE"), start=start, end=end
-    )
-    premiums = _sum_option_premiums(conn, account_id, start=start, end=end)
+    from dividend_agent.portfolio.performance import compute_performance
+
+    perf = compute_performance(conn, account_id=account_id, start=start, end=end)
     assignments = _count_activities(
         conn, account_id, ("OPASN", "ASSIGN", "EXERCISE"), start=start, end=end
     )
@@ -82,8 +80,11 @@ def build_monthly_report(
         account_id=account_id,
         equity=equity,
         cash=cash,
-        dividends_received=str(dividends),
-        net_option_premiums=str(premiums),
+        dividends_received=str(perf.dividends),
+        net_option_premiums=str(perf.net_option_premiums),
+        realized_stock_pnl=str(perf.realized_stock_pnl),
+        unrealized_stock_pnl=str(perf.unrealized_stock_pnl),
+        total_return_note=perf.methodology + (f"; notes={list(perf.notes)}" if perf.notes else ""),
         assignments=assignments,
         pending_approvals=pending,
         skipped_opportunities=skipped,
@@ -98,68 +99,6 @@ def write_monthly_report(report: MonthlyReport, reports_dir: Path) -> Path:
     path = reports_dir / f"monthly-report-{report.period_key}.json"
     path.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
     return path
-
-
-def _sum_activity_amount(
-    conn: sqlite3.Connection,
-    account_id: str | None,
-    types: tuple[str, ...],
-    *,
-    start: str = "",
-    end: str = "",
-) -> Decimal:
-    if not account_id:
-        return Decimal("0")
-    placeholders = ",".join("?" * len(types))
-    sql = f"""
-        SELECT net_amount, transaction_time FROM activities
-        WHERE account_id = ? AND activity_type IN ({placeholders})
-    """
-    params: list[Any] = [account_id, *types]
-    rows = conn.execute(sql, params).fetchall()
-    total = Decimal("0")
-    for r in rows:
-        if start and end and not _in_period(r["transaction_time"], start, end):
-            continue
-        if r["net_amount"]:
-            total += Decimal(str(r["net_amount"]))
-    return total
-
-
-def _sum_option_premiums(
-    conn: sqlite3.Connection,
-    account_id: str | None,
-    *,
-    start: str = "",
-    end: str = "",
-) -> Decimal:
-    if not account_id:
-        return Decimal("0")
-    rows = conn.execute(
-        """
-        SELECT filled_qty, filled_avg_price, side, asset_class, symbol, submitted_at, updated_at
-        FROM orders
-        WHERE account_id = ? AND status = 'filled'
-        """,
-        (account_id,),
-    ).fetchall()
-    total = Decimal("0")
-    for r in rows:
-        ts = r["updated_at"] or r["submitted_at"]
-        if start and end and not _in_period(ts, start, end):
-            continue
-        asset = (r["asset_class"] or "").lower()
-        sym = r["symbol"] or ""
-        if "option" not in asset and len(sym) < 15:
-            continue
-        qty = Decimal(str(r["filled_qty"] or "0"))
-        px = Decimal(str(r["filled_avg_price"] or "0"))
-        prem = qty * px * Decimal("100")
-        if (r["side"] or "").lower() == "sell":
-            total += prem
-        else:
-            total -= prem
-    return total
 
 
 def _count_activities(

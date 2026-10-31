@@ -219,21 +219,48 @@ class AlpacaPaperAdapter(BrokerAdapter):
         return out
 
     def list_orders(self, *, status: str = "all", limit: int = 100) -> list[OrderSnapshot]:
+        """Paginate Alpaca orders (until exhausted or max pages)."""
         self._require_verified()
-        payload = self._request(
-            "GET",
-            "/v2/orders",
-            params={"status": status, "limit": limit, "direction": "desc"},
-        )
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            raise BrokerTransportError("unexpected /v2/orders payload")
+        page_limit = max(1, min(limit, 500))
         out: list[OrderSnapshot] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            out.append(_order_from_payload(item))
+        seen: set[str] = set()
+        until: str | None = None
+        max_pages = 10
+        for _ in range(max_pages):
+            params: dict[str, Any] = {
+                "status": status,
+                "limit": page_limit,
+                "direction": "desc",
+            }
+            if until:
+                params["until"] = until
+            payload = self._request("GET", "/v2/orders", params=params)
+            if payload is None:
+                break
+            if not isinstance(payload, list):
+                raise BrokerTransportError("unexpected /v2/orders payload")
+            if not payload:
+                break
+            page_added = 0
+            oldest_submitted: str | None = None
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                order = _order_from_payload(item)
+                if order.broker_order_id in seen:
+                    continue
+                seen.add(order.broker_order_id)
+                out.append(order)
+                page_added += 1
+                submitted = item.get("submitted_at") or item.get("created_at")
+                if isinstance(submitted, str) and (
+                    oldest_submitted is None or submitted < oldest_submitted
+                ):
+                    oldest_submitted = submitted
+            if page_added == 0 or len(payload) < page_limit or oldest_submitted is None:
+                break
+            # Next page: older than the oldest on this page
+            until = oldest_submitted
         return out
 
     def submit_paper_order(self, request: PaperOrderRequest) -> OrderSnapshot:
@@ -297,36 +324,59 @@ class AlpacaPaperAdapter(BrokerAdapter):
         activity_types: tuple[str, ...] | None = None,
         page_size: int = 100,
     ) -> list[ActivitySnapshot]:
+        """Paginate account activities via Alpaca ``page_token`` (max 10 pages)."""
         self._require_verified()
-        params: dict[str, Any] = {"page_size": page_size, "direction": "desc"}
-        if activity_types:
-            params["activity_types"] = ",".join(activity_types)
-        payload = self._request("GET", "/v2/account/activities", params=params)
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            raise BrokerTransportError("unexpected /v2/account/activities payload")
+        size = max(1, min(page_size, 100))
         out: list[ActivitySnapshot] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            activity_id = str(
-                item.get("id") or item.get("activity_id") or item.get("transaction_time") or ""
-            )
-            out.append(
-                ActivitySnapshot(
-                    activity_id=activity_id,
-                    activity_type=str(item.get("activity_type") or item.get("type") or ""),
-                    symbol=str(item["symbol"]) if item.get("symbol") else None,
-                    side=str(item["side"]) if item.get("side") else None,
-                    qty=_dec_opt(item.get("qty")),
-                    price=_dec_opt(item.get("price")),
-                    net_amount=_dec_opt(item.get("net_amount")),
-                    transaction_time=_parse_dt(item.get("transaction_time") or item.get("date")),
-                    order_id=str(item["order_id"]) if item.get("order_id") else None,
-                    raw=item,
+        seen: set[str] = set()
+        page_token: str | None = None
+        max_pages = 10
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"page_size": size, "direction": "desc"}
+            if activity_types:
+                params["activity_types"] = ",".join(activity_types)
+            if page_token:
+                params["page_token"] = page_token
+            payload = self._request("GET", "/v2/account/activities", params=params)
+            if payload is None:
+                break
+            if not isinstance(payload, list):
+                raise BrokerTransportError("unexpected /v2/account/activities payload")
+            if not payload:
+                break
+            last_id: str | None = None
+            page_added = 0
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                activity_id = str(
+                    item.get("id") or item.get("activity_id") or item.get("transaction_time") or ""
                 )
-            )
+                if activity_id and activity_id in seen:
+                    continue
+                if activity_id:
+                    seen.add(activity_id)
+                    last_id = activity_id
+                out.append(
+                    ActivitySnapshot(
+                        activity_id=activity_id,
+                        activity_type=str(item.get("activity_type") or item.get("type") or ""),
+                        symbol=str(item["symbol"]) if item.get("symbol") else None,
+                        side=str(item["side"]) if item.get("side") else None,
+                        qty=_dec_opt(item.get("qty")),
+                        price=_dec_opt(item.get("price")),
+                        net_amount=_dec_opt(item.get("net_amount")),
+                        transaction_time=_parse_dt(
+                            item.get("transaction_time") or item.get("date")
+                        ),
+                        order_id=str(item["order_id"]) if item.get("order_id") else None,
+                        raw=item,
+                    )
+                )
+                page_added += 1
+            if page_added == 0 or len(payload) < size or not last_id:
+                break
+            page_token = last_id
         return out
 
 

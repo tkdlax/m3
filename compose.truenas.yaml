@@ -8,15 +8,15 @@ services:
   agent:
     volumes:
       - type: bind
-        source: ${TRUENAS_DATA_PATH:-/mnt/tank/apps/dividend-agent/data}
+        source: ${TRUENAS_DATA_PATH:-/mnt/RJMSA_Nas/dividend-agent/data}
         target: /data
       - type: bind
-        source: ${TRUENAS_REPORTS_PATH:-/mnt/tank/apps/dividend-agent/reports}
+        source: ${TRUENAS_REPORTS_PATH:-/mnt/RJMSA_Nas/dividend-agent/reports}
         target: /reports
       - type: bind
-        source: ${TRUENAS_LOGS_PATH:-/mnt/tank/apps/dividend-agent/logs}
+        source: ${TRUENAS_LOGS_PATH:-/mnt/RJMSA_Nas/dividend-agent/logs}
         target: /logs
       - type: bind
-        source: ${TRUENAS_CONFIG_PATH:-/mnt/tank/apps/dividend-agent/config/strategy.yaml}
+        source: ${TRUENAS_CONFIG_PATH:-/mnt/RJMSA_Nas/dividend-agent/config/strategy.yaml}
         target: /config/strategy.yaml
         read_only: true
