@@ -55,3 +55,6 @@ jobs:
 
       - name: TrueNAS override config
         run: docker compose -f compose.yaml -f compose.truenas.yaml config >/dev/null
+
+      - name: MCP override config
+        run: docker compose -f compose.yaml -f compose.mcp.yaml config >/dev/null

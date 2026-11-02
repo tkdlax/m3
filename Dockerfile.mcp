@@ -1,0 +1,27 @@
+# MCP control-plane image: agent app + MCP SDK + docker CLI for exec into agent.
+# Does not bake Alpaca credentials. Paper keys stay in the agent container.
+#
+# Build after the agent image exists:
+#   docker compose build
+#   docker compose -f compose.yaml -f compose.mcp.yaml build mcp
+ARG IMAGE_TAG=0.1.0
+FROM dividend-agent:${IMAGE_TAG}
+
+USER root
+
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+
+# MCP SDK is an optional extra — install into the existing venv for this image only.
+COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /usr/local/bin/uv
+RUN uv pip install --python /opt/venv/bin/python --no-cache "mcp>=1.12,<2"
+
+ENV MCP_TRANSPORT=streamable-http \
+    MCP_HOST=127.0.0.1 \
+    MCP_PORT=8765 \
+    DIVIDEND_AGENT_MCP_BACKEND=docker \
+    DIVIDEND_AGENT_MCP_CONTAINER=dividend-agent \
+    PATH="/opt/venv/bin:$PATH"
+
+# docker.sock client; no ALPACA_* configured on this service.
+USER root
+ENTRYPOINT ["dividend-agent-mcp"]

@@ -46,6 +46,7 @@ trade_app = typer.Typer(help="Paper order lifecycle (dry-run / paper_auto).")
 approvals_app = typer.Typer(help="Human approval queue.")
 scheduler_app = typer.Typer(help="Autonomous scheduler cycles (idempotent).")
 ops_app = typer.Typer(help="Operator promote / emergency helpers.")
+reports_app = typer.Typer(help="Reports and operator status summaries (read-only).")
 app.add_typer(config_app, name="config")
 app.add_typer(broker_app, name="broker")
 app.add_typer(ledger_app, name="ledger")
@@ -55,6 +56,7 @@ app.add_typer(trade_app, name="trade")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(scheduler_app, name="scheduler")
 app.add_typer(ops_app, name="ops")
+app.add_typer(reports_app, name="reports")
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -848,6 +850,55 @@ def ops_emergency_stop_cmd() -> None:
         "Research/reporting may continue; new order submits stay blocked.\n"
         "There is no live trading path in v1."
     )
+
+
+@reports_app.command("summary")
+def reports_summary_cmd(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Optional strategy YAML for mode context."),
+    ] = None,
+    db: Annotated[Path, typer.Option("--db")] = Path("/data/agent.sqlite3"),
+    reports: Annotated[Path, typer.Option("--reports")] = Path("/reports"),
+) -> None:
+    """Read-only status: health, pending approvals, recent report files."""
+    from dividend_agent.execution.approval_queue import ApprovalQueue
+    from dividend_agent.storage import ExecutionRepository
+
+    loaded = None
+    if config is not None:
+        try:
+            loaded = load_config(config)
+        except ConfigError as exc:
+            err_console.print(f"[red]config error:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+
+    pending: list[dict[str, object]] = []
+    if db.exists():
+        conn = open_migrated(db)
+        try:
+            pending = ApprovalQueue(ExecutionRepository(conn)).list_pending()
+        finally:
+            conn.close()
+
+    report_files: list[str] = []
+    if reports.is_dir():
+        report_files = sorted(
+            (p.name for p in reports.iterdir() if p.is_file()),
+            reverse=True,
+        )[:20]
+
+    payload = {
+        "health": health_payload(loaded),
+        "db": str(db),
+        "db_exists": db.exists(),
+        "pending_approvals": len(pending),
+        "pending_approval_ids": [str(r.get("id", "")) for r in pending[:50]],
+        "reports_dir": str(reports),
+        "recent_reports": report_files,
+        "submission": "not_available_via_reports_summary",
+    }
+    console.print_json(json.dumps(payload))
 
 
 def main() -> None:

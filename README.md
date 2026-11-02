@@ -76,6 +76,10 @@ Details: [docs/OPERATIONS.md](docs/OPERATIONS.md). Remaining open policy choices
 | `dividend-agent approvals list\|approve\|reject` | Exception queue |
 | `dividend-agent scheduler run\|status` | Idempotent jobs |
 | `dividend-agent ops record-promote \| emergency-stop` | Promote audit / kill-switch help |
+| `dividend-agent reports summary` | Read-only health + approvals + report files |
+| `dividend-agent-mcp` | Chat MCP control plane (CLI wrappers; no Alpaca secrets) |
+
+MCP setup for Cursor / Claude / Grok: **[docs/MCP_CONTROL_PLANE.md](docs/MCP_CONTROL_PLANE.md)**. Optional Compose sidecar: `compose.mcp.yaml` (localhost only).
 
 ## Documentation
 

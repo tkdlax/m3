@@ -8,6 +8,7 @@ Operate and extend a **paper-only** dividend income + covered-call system. Prefe
 
 - Read/validate strategy config; run research, screening, dry-run recommendations (as implemented).
 - Inspect logs, reports, and approval queues.
+- Trigger jobs via the **MCP control plane** (`dividend-agent-mcp`) — CLI wrappers only.
 - Propose code/tests/docs for milestones M0–M6.
 
 ## Hard prohibitions
@@ -16,7 +17,8 @@ Operate and extend a **paper-only** dividend income + covered-call system. Prefe
 - No naked calls; no strike below weighted-average acquisition cost.
 - No inventing market data, probabilities, or §21 limit values.
 - No auto-submit while any execution guardrail is `null` or paper is unverified.
-- Research agents must not call order-submission tools.
+- Research / chat agents must not call order-submission tools, Alpaca MCP, or raw Alpaca APIs.
+- MCP approvals are by `approval_id` only (`--no-submit`); no free-text trade approval.
 
 ## Workflow
 
@@ -32,4 +34,4 @@ Operate and extend a **paper-only** dividend income + covered-call system. Prefe
 - Explicit callouts when §21 items remain open.
 - Tests for fail-closed paths you touch.
 
-Canonical detail: `docs/STRATEGY.md`, `docs/DECISION_POLICY.md`, `docs/PROBABILITY_MODEL.md`.
+Canonical detail: `docs/STRATEGY.md`, `docs/DECISION_POLICY.md`, `docs/PROBABILITY_MODEL.md`, `docs/MCP_CONTROL_PLANE.md`.
